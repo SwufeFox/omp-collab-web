@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f7f9" />
+		<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0c0d10" />
+
+		<title>omp collab — live agent session in your browser</title>
+		<meta
+			name="description"
+			content="Guest client for omp collab sessions: watch a live coding-agent session — streaming transcript, tool calls, subagents — and prompt the host agent from any browser. End-to-end encrypted; the room key never leaves the URL fragment."
+		/>
+		<meta name="robots" content="index, follow, max-image-preview:large" />
+
+		<link rel="icon" type="image/svg+xml" href="./public/favicon.svg" />
+		<link rel="icon" type="image/x-icon" href="./public/favicon.ico" sizes="any" />
+		<link rel="icon" type="image/png" sizes="256x256" href="./public/favicon.png" />
+		<link rel="icon" type="image/png" sizes="32x32" href="./public/favicon-32x32.png" />
+		<link rel="icon" type="image/png" sizes="16x16" href="./public/favicon-16x16.png" />
+		<link rel="apple-touch-icon" sizes="180x180" href="./public/favicon-180x180.png" />
+		<link rel="manifest" href="./public/manifest.webmanifest" />
+
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			rel="stylesheet"
+			href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap"
+		/>
+	</head>
+	<body>
+		<div id="root"></div>
+		<script>(function(){try{var s=localStorage.getItem("omp-collab-theme");var sys=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";var t=(s==="light"||s==="dark")?s:sys;document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t;}catch(e){}})();</script>
+		<script type="module" src="./src/main.tsx"></script>
+	</body>
+</html>
