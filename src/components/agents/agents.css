@@ -4,11 +4,15 @@
 
 .ag-panel {
 	display: flex;
+	flex: 1;
 	flex-direction: column;
 	gap: 1px;
+	height: 100%;
 	min-height: 0;
-	padding: 4px 0 8px;
+	padding: 4px 0 12px;
 	overflow-y: auto;
+	overscroll-behavior: contain;
+	-webkit-overflow-scrolling: touch;
 	font-size: 13px;
 }
 
@@ -49,6 +53,7 @@
 
 .ag-row {
 	display: flex;
+	flex: none;
 	flex-direction: column;
 	gap: 4px;
 	width: 100%;
@@ -437,8 +442,12 @@
 	flex: 1;
 	flex-direction: column;
 	min-height: 0;
-	padding: 10px 14px;
-	overflow-y: auto;
+	overflow: hidden;
+}
+
+.ag-drawer-body .ag-empty,
+.ag-drawer-body .ag-fetch-error {
+	margin: 12px 14px;
 }
 
 .ag-chat {
@@ -480,12 +489,19 @@
 }
 
 @media (max-width: 960px) {
+	.ag-panel {
+		padding-top: 0;
+	}
 	.ag-rail-head {
+		position: sticky;
+		top: 0;
+		z-index: 2;
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 0 4px 8px 10px;
+		padding: 10px 4px 8px 10px;
 		margin-bottom: 4px;
+		background: var(--panel);
 		border-bottom: 1px solid var(--border);
 	}
 	.ag-row {
@@ -496,9 +512,10 @@
 @media (max-width: 680px) {
 	.ag-drawer {
 		top: calc(6px + env(safe-area-inset-top, 0px));
+		bottom: auto;
+		height: calc(var(--viewport-height, 100dvh) - 6px - env(safe-area-inset-top, 0px));
 		left: 0;
 		right: 0;
-		bottom: 0;
 		width: 100%;
 		border-left: 0;
 		border-right: 0;

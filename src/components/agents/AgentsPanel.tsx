@@ -62,6 +62,7 @@ const AgentRow = memo(function AgentRow(props: {
 		<button
 			type="button"
 			className={selected ? "ag-row ag-row--selected" : "ag-row"}
+			aria-pressed={selected}
 			onClick={() => onSelect(selected ? null : agent.id)}
 		>
 			<span className="ag-row-head">
@@ -99,6 +100,11 @@ export const AgentsPanel = memo(function AgentsPanel(props: {
 			const ar = a.status === "running" ? 0 : 1;
 			const br = b.status === "running" ? 0 : 1;
 			if (ar !== br) return ar - br;
+			// Keep running subagents in spawn order so live progress updates never swap rows mid-tap on mobile.
+			if (ar === 0) {
+				if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+				return a.id.localeCompare(b.id);
+			}
 			return b.lastActivity - a.lastActivity;
 		});
 		return { mains, subs };

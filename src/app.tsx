@@ -4,13 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentDrawer } from "./components/agents/AgentDrawer";
 import { AgentsPanel } from "./components/agents/AgentsPanel";
 import { Banners } from "./components/shell/Banners";
-import { Composer } from "./components/shell/Composer";
+import { Composer, type ComposerSlashUiAction } from "./components/shell/Composer";
 import { ConnectScreen } from "./components/shell/ConnectScreen";
 import { HeaderBar } from "./components/shell/HeaderBar";
 import { ImageLightbox } from "./components/shell/ImageLightbox";
 import { Toasts } from "./components/shell/Toasts";
 import { Transcript, type TranscriptViewMode } from "./components/transcript/Transcript";
-import { GuestClient } from "./lib/client";
+import { GuestClient, type Notice } from "./lib/client";
 import { extractCollabLink } from "./lib/link";
 import {
 	dropQueuedPrompts,
@@ -18,12 +18,18 @@ import {
 	promoteQueuedToSending,
 	reconcilePendingPrompts,
 } from "./lib/prompt-queue";
+import { setThemePreference, type ThemePreference, useThemePreference } from "./lib/theme";
 import { useGuestSnapshot } from "./lib/use-guest";
 import type { ToolRenderHost } from "./tool-render";
 import "./components/shell/shell.css";
 
 const NAME_KEY = "omp.collab.name";
 const VIEW_MODE_KEY = "omp.collab.viewMode";
+const NEXT_THEME: Record<ThemePreference, ThemePreference> = {
+	system: "light",
+	light: "dark",
+	dark: "system",
+};
 
 interface Creds {
 	link: string;
@@ -162,10 +168,12 @@ interface SessionProps {
 
 function Session({ client, guestName, draftKey, onLeave, onRejoin }: SessionProps): ReactNode {
 	const snap = useGuestSnapshot(client);
+	const { preference } = useThemePreference();
 	const [railOpen, setRailOpen] = useState(false);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [previewSrc, setPreviewSrc] = useState<string | null>(null);
 	const [rawPendingPrompts, setRawPendingPrompts] = useState<readonly PendingPrompt[]>([]);
+	const [localNotices, setLocalNotices] = useState<readonly Notice[]>([]);
 	const [sendSeq, setSendSeq] = useState(0);
 	const [viewState, setViewState] = useState<{ mode: TranscriptViewMode; seq: number }>(() => ({
 		mode: storedViewMode(),
@@ -173,8 +181,16 @@ function Session({ client, guestName, draftKey, onLeave, onRejoin }: SessionProp
 	}));
 	const autoOpenedRef = useRef(false);
 	const pendingIdSeqRef = useRef(0);
+	const localNoticeIdRef = useRef(-1);
 	const entriesLenRef = useRef(snap.entries.length);
 	entriesLenRef.current = snap.entries.length;
+
+	const pushLocalNotice = useCallback((level: "info" | "warning", message: string) => {
+		setLocalNotices(prev => [
+			...prev.slice(-9),
+			{ id: localNoticeIdRef.current--, level, message, at: Date.now() },
+		]);
+	}, []);
 
 	// Reconcile synchronously during render so confirmed entries never flash twice even for a single frame.
 	const pendingPrompts = useMemo(
@@ -244,6 +260,11 @@ function Session({ client, guestName, draftKey, onLeave, onRejoin }: SessionProp
 		client.sendAbort();
 	}, [client]);
 
+	const resumeHost = useCallback(() => {
+		client.sendResume();
+		pushLocalNotice("info", "Sent resume to host session.");
+	}, [client, pushLocalNotice]);
+
 	const subCount = useMemo(() => snap.agents.filter(a => a.kind === "sub").length, [snap.agents]);
 	const hostName = useMemo(
 		() => snap.state?.participants.find(p => p.role === "host")?.name,
@@ -291,6 +312,41 @@ function Session({ client, guestName, draftKey, onLeave, onRejoin }: SessionProp
 			// storage unavailable
 		}
 	}, []);
+
+	const handleSlashAction = useCallback(
+		(action: ComposerSlashUiAction) => {
+			switch (action.kind) {
+				case "agents":
+					setRailOpen(open => !open);
+					break;
+				case "view":
+					changeViewMode(action.mode);
+					pushLocalNotice("info", `Detail level: ${action.mode}`);
+					break;
+				case "theme": {
+					const next = NEXT_THEME[preference];
+					setThemePreference(next);
+					pushLocalNotice("info", `Theme: ${next}`);
+					break;
+				}
+				case "copy-link":
+					void navigator.clipboard
+						?.writeText(window.location.href)
+						.then(() => pushLocalNotice("info", "Invite link copied to clipboard."))
+						.catch(() => pushLocalNotice("warning", "Clipboard access unavailable."));
+					break;
+				case "leave":
+					onLeave();
+					break;
+			}
+		},
+		[changeViewMode, onLeave, preference, pushLocalNotice],
+	);
+
+	const mergedNotices = useMemo(
+		() => (localNotices.length === 0 ? snap.notices : [...snap.notices, ...localNotices]),
+		[localNotices, snap.notices],
+	);
 
 	// Global session shortcuts: Alt+1/2/3 view modes, Alt+A or Ctrl/Cmd+\ agents panel, Esc mobile rail.
 	useEffect(() => {
@@ -379,6 +435,9 @@ function Session({ client, guestName, draftKey, onLeave, onRejoin }: SessionProp
 						onDispatchPrompt={dispatchPrompt}
 						onDeliverQueue={deliverQueue}
 						onAbortTriggered={abortRun}
+						onResumeHost={resumeHost}
+						onSlashAction={handleSlashAction}
+						onLocalNotice={pushLocalNotice}
 						onPreviewImage={openPreview}
 					/>
 				</section>
@@ -422,7 +481,7 @@ function Session({ client, guestName, draftKey, onLeave, onRejoin }: SessionProp
 				onRejoin={onRejoin}
 				onNewLink={onLeave}
 			/>
-			<Toasts notices={snap.notices} />
+			<Toasts notices={mergedNotices} />
 			<ImageLightbox src={previewSrc} onClose={closePreview} />
 		</div>
 	);

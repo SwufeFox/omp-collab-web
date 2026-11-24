@@ -187,6 +187,10 @@
 	color: var(--ok);
 }
 
+.tr-row--custom {
+	padding: 4px 0;
+}
+
 .tr-row--custom .tr-body {
 	color: var(--fg-muted);
 }
@@ -194,8 +198,50 @@
 .tr-custom {
 	display: flex;
 	flex-direction: column;
-	align-items: flex-start;
-	gap: 6px;
+	align-items: stretch;
+	gap: 4px;
+	min-width: 0;
+}
+
+.tr-custom-head {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	width: 100%;
+	min-height: 28px;
+	padding: 3px 8px 3px 5px;
+	border: none;
+	border-radius: var(--radius);
+	background: transparent;
+	color: var(--fg-muted);
+	text-align: left;
+	font-size: 12px;
+	transition:
+		background 120ms ease-out,
+		color 120ms ease-out;
+}
+
+.tr-custom-head:hover {
+	color: var(--fg);
+	background: var(--hover);
+}
+
+.tr-custom-preview {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--fg-faint);
+	font-size: 12px;
+}
+
+.tr-custom-body {
+	margin: 2px 0 4px 10px;
+	padding: 4px 10px 4px 12px;
+	border-left: 1.5px solid var(--border-strong);
+	color: var(--fg-muted);
+	font-size: 13px;
 }
 
 .tr-msg-img-btn {
@@ -924,7 +970,8 @@
 		opacity: 1;
 	}
 	.tr-steps-collapsed,
-	.tr-think-head {
+	.tr-think-head,
+	.tr-custom-head {
 		min-height: 34px;
 	}
 	.tr-divider-btn {

@@ -305,6 +305,10 @@ function handleFrame(frame: WireFrame, fromPeer: number): void {
 		case "deliver-queue":
 			handleDeliverQueue();
 			break;
+		case "resume":
+			notice("info", `${peerName(fromPeer)} resumed host`);
+			if (replayTimer === null && replayQueue.length === 0) startReplay();
+			break;
 		case "abort":
 			handleAbort(fromPeer);
 			break;

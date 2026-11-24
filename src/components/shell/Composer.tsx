@@ -1,9 +1,36 @@
 import type { CollabUiRequest, ImageContent } from "@oh-my-pi/pi-wire";
-import { Clock, CornerDownLeft, CornerDownRight, Eye, ImagePlus, SendHorizontal, ShieldAlert, Square, X } from "lucide-react";
+import {
+	Clock,
+	CornerDownLeft,
+	CornerDownRight,
+	Eye,
+	ImagePlus,
+	SendHorizontal,
+	ShieldAlert,
+	Square,
+	Terminal,
+	X,
+} from "lucide-react";
 import type { ChangeEvent, ClipboardEvent, DragEvent, KeyboardEvent, ReactNode, RefObject } from "react";
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ConnectionPhase, GuestClient } from "../../lib/client";
+import {
+	extractBangCommand,
+	filterSlashCommands,
+	formatRunAgentPrompt,
+	parseSlashCommand,
+	shouldShowCommandMenu,
+	type SlashCommandDef,
+} from "../../lib/commands";
 import type { PendingPrompt } from "../../lib/prompt-queue";
+import type { TranscriptViewMode } from "../transcript/Transcript";
+
+export type ComposerSlashUiAction =
+	| { kind: "agents" }
+	| { kind: "theme" }
+	| { kind: "copy-link" }
+	| { kind: "leave" }
+	| { kind: "view"; mode: TranscriptViewMode };
 
 export interface ComposerProps {
 	client: GuestClient;
@@ -21,12 +48,20 @@ export interface ComposerProps {
 	queuedPrompts?: readonly PendingPrompt[];
 	/** Optional per-session key to preserve unsent text across reconnects in sessionStorage. */
 	draftKey?: string;
+	/** Optional initial text seed (primarily for testing). */
+	initialText?: string;
 	/** Optional coordinator hook for optimistic send/queue tracking; falls back to client.sendPrompt. */
 	onDispatchPrompt?(payload: { text: string; images: readonly ImageContent[]; followUp: boolean }): void;
 	/** Optional coordinator hook when delivering queued messages immediately. */
 	onDeliverQueue?(): void;
 	/** Optional coordinator hook when aborting the active turn. */
 	onAbortTriggered?(): void;
+	/** Resumes host session via protocol `{ t: "resume" }`. */
+	onResumeHost?(): void;
+	/** Executes UI/session slash actions in App shell. */
+	onSlashAction?(action: ComposerSlashUiAction): void;
+	/** Surfaces brief client feedback toast. */
+	onLocalNotice?(level: "info" | "warning", message: string): void;
 	/** Opens full-screen preview when clicking an attached image thumbnail. */
 	onPreviewImage?(src: string): void;
 }
@@ -48,7 +83,12 @@ const LINE_PX = 21;
 const PAD_Y = 16;
 const MAX_ROWS = 8;
 
-export function autosizeTextarea(el: HTMLTextAreaElement | null, maxRows = MAX_ROWS, linePx = LINE_PX, padY = PAD_Y): void {
+export function autosizeTextarea(
+	el: HTMLTextAreaElement | null,
+	maxRows = MAX_ROWS,
+	linePx = LINE_PX,
+	padY = PAD_Y,
+): void {
 	if (!el) return;
 	const minHeight = linePx + padY;
 	// Fast path for single-line / cleared state: avoids forced height=0 reflow on every send/queue.
@@ -309,17 +349,23 @@ export const Composer = memo(function Composer({
 	queuedMessageCount,
 	queuedPrompts = EMPTY_QUEUED,
 	draftKey,
+	initialText,
 	onDispatchPrompt,
 	onDeliverQueue,
 	onAbortTriggered,
+	onResumeHost,
+	onSlashAction,
+	onLocalNotice,
 	onPreviewImage,
 }: ComposerProps): ReactNode {
-	const [text, setText] = useState(() => readDraft(draftKey));
+	const [text, setText] = useState(() => initialText ?? readDraft(draftKey));
 	const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
 	const [attachError, setAttachError] = useState<string | null>(null);
 	const [dragOver, setDragOver] = useState(false);
 	const [localStopping, setLocalStopping] = useState(false);
 	const [delivering, setDelivering] = useState(false);
+	const [slashDismissed, setSlashDismissed] = useState(false);
+	const [slashActiveIdx, setSlashActiveIdx] = useState(0);
 
 	const taRef = useRef<HTMLTextAreaElement | null>(null);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -337,6 +383,21 @@ export const Composer = memo(function Composer({
 	const showQueueShelf = totalQueued > 0 && (busy || queuedPrompts.length > 0);
 	const hasContent = text.trim().length > 0 || attachments.length > 0;
 	const canSend = canPrompt && hasContent;
+
+	const showMenuBase = canPrompt && !slashDismissed && shouldShowCommandMenu(text);
+	const filteredCommands = useMemo(
+		() => (showMenuBase ? filterSlashCommands(text) : []),
+		[showMenuBase, text],
+	);
+	const bangCommand = useMemo(() => (showMenuBase ? extractBangCommand(text) : null), [showMenuBase, text]);
+	const parsedSlash = useMemo(() => parseSlashCommand(text), [text]);
+	const slashMenuOpen = showMenuBase && (filteredCommands.length > 0 || parsedSlash.kind === "unknown" || bangCommand !== null);
+	const clampedSlashIdx =
+		filteredCommands.length > 0 ? Math.min(slashActiveIdx, filteredCommands.length - 1) : 0;
+
+	useEffect(() => {
+		setSlashActiveIdx(0);
+	}, [text]);
 
 	useEffect(() => {
 		if (!busy) {
@@ -378,6 +439,26 @@ export const Composer = memo(function Composer({
 		return () => window.removeEventListener("keydown", onWindowKeyDown);
 	}, [canPrompt, uiRequest]);
 
+	const clearComposerDraft = useCallback((): void => {
+		setText("");
+		setAttachments([]);
+		setAttachError(null);
+		setSlashDismissed(false);
+		writeDraft(draftKey, "");
+		taRef.current?.focus({ preventScroll: true });
+	}, [draftKey]);
+
+	const recordHistory = useCallback((entry: string): void => {
+		if (!entry) return;
+		const hist = historyRef.current;
+		if (hist[hist.length - 1] !== entry) {
+			hist.push(entry);
+			if (hist.length > MAX_HISTORY) hist.shift();
+		}
+		historyIdxRef.current = -1;
+		savedDraftRef.current = "";
+	}, []);
+
 	const ingestFiles = useCallback(async (files: readonly File[]): Promise<void> => {
 		if (files.length === 0) return;
 		setAttachError(null);
@@ -401,43 +482,28 @@ export const Composer = memo(function Composer({
 		taRef.current?.focus({ preventScroll: true });
 	}, []);
 
-	const commitPrompt = useCallback(
-		(followUp: boolean): void => {
-			const trimmed = text.trim();
-			if ((!trimmed && attachments.length === 0) || !live || readOnly) return;
-			const imgs = attachments.map(a => a.image);
-			if (trimmed) {
-				const hist = historyRef.current;
-				if (hist[hist.length - 1] !== trimmed) {
-					hist.push(trimmed);
-					if (hist.length > MAX_HISTORY) hist.shift();
-				}
-			}
-			historyIdxRef.current = -1;
-			savedDraftRef.current = "";
-
+	const dispatchText = useCallback(
+		(promptText: string, followUp: boolean, imgs: readonly ImageContent[] = []): void => {
 			if (onDispatchPrompt) {
-				onDispatchPrompt({ text: trimmed, images: imgs, followUp });
+				onDispatchPrompt({ text: promptText, images: imgs, followUp });
 			} else {
-				client.sendPrompt(trimmed, imgs.length > 0 ? imgs : undefined, followUp ? { followUp: true } : undefined);
+				client.sendPrompt(promptText, imgs.length > 0 ? imgs : undefined, followUp ? { followUp: true } : undefined);
 			}
-
-			setText("");
-			setAttachments([]);
-			setAttachError(null);
-			writeDraft(draftKey, "");
-			taRef.current?.focus({ preventScroll: true });
 		},
-		[attachments, client, draftKey, live, onDispatchPrompt, readOnly, text],
+		[client, onDispatchPrompt],
 	);
 
 	const triggerDeliverQueue = useCallback((): void => {
-		if (!canPrompt || totalQueued === 0) return;
+		if (!canPrompt) return;
+		if (totalQueued === 0) {
+			onLocalNotice?.("info", "No queued prompts to deliver.");
+			return;
+		}
 		setDelivering(true);
 		if (onDeliverQueue) onDeliverQueue();
 		else client.sendDeliverQueue();
 		taRef.current?.focus({ preventScroll: true });
-	}, [canPrompt, client, onDeliverQueue, totalQueued]);
+	}, [canPrompt, client, onDeliverQueue, onLocalNotice, totalQueued]);
 
 	const triggerAbort = useCallback((): void => {
 		if (!live) return;
@@ -446,10 +512,165 @@ export const Composer = memo(function Composer({
 		else client.sendAbort();
 	}, [client, live, onAbortTriggered]);
 
+	const executeSlashCommand = useCallback(
+		(def: SlashCommandDef, arg: string, fromClick = false): void => {
+			if (def.takesArgs && !arg) {
+				setText(`/${def.name} `);
+				setSlashDismissed(false);
+				taRef.current?.focus({ preventScroll: true });
+				return;
+			}
+			const trimmedRaw = text.trim();
+			if (trimmedRaw) recordHistory(trimmedRaw);
+
+			switch (def.id) {
+				case "continue":
+					if (onResumeHost) onResumeHost();
+					else client.sendResume();
+					clearComposerDraft();
+					break;
+				case "stop":
+					if (!busy) {
+						onLocalNotice?.("info", "Host agent is already idle.");
+						if (!fromClick) clearComposerDraft();
+						return;
+					}
+					triggerAbort();
+					clearComposerDraft();
+					break;
+				case "deliver":
+					if (!busy || totalQueued === 0) {
+						onLocalNotice?.("info", totalQueued === 0 ? "Queue is empty." : "Host turn is idle.");
+						if (!fromClick) clearComposerDraft();
+						return;
+					}
+					triggerDeliverQueue();
+					clearComposerDraft();
+					break;
+				case "steer":
+					dispatchText(arg, false, attachments.map(a => a.image));
+					clearComposerDraft();
+					break;
+				case "queue":
+					dispatchText(arg, true, attachments.map(a => a.image));
+					clearComposerDraft();
+					break;
+				case "run":
+					dispatchText(formatRunAgentPrompt(arg), busy, attachments.map(a => a.image));
+					clearComposerDraft();
+					break;
+				case "agents":
+					onSlashAction?.({ kind: "agents" });
+					clearComposerDraft();
+					break;
+				case "focus":
+				case "standard":
+				case "detailed":
+					onSlashAction?.({ kind: "view", mode: def.id });
+					clearComposerDraft();
+					break;
+				case "theme":
+					onSlashAction?.({ kind: "theme" });
+					clearComposerDraft();
+					break;
+				case "copy-link":
+					onSlashAction?.({ kind: "copy-link" });
+					clearComposerDraft();
+					break;
+				case "leave":
+					clearComposerDraft();
+					onSlashAction?.({ kind: "leave" });
+					break;
+			}
+		},
+		[
+			attachments,
+			busy,
+			clearComposerDraft,
+			client,
+			dispatchText,
+			onLocalNotice,
+			onResumeHost,
+			onSlashAction,
+			recordHistory,
+			text,
+			totalQueued,
+			triggerAbort,
+			triggerDeliverQueue,
+		],
+	);
+
+	const runBangViaHost = useCallback(
+		(cmdText: string): void => {
+			if (!canPrompt || !cmdText) return;
+			recordHistory(text.trim());
+			dispatchText(formatRunAgentPrompt(cmdText), busy, attachments.map(a => a.image));
+			clearComposerDraft();
+		},
+		[attachments, busy, canPrompt, clearComposerDraft, dispatchText, recordHistory, text],
+	);
+
+	const commitPrompt = useCallback(
+		(followUp: boolean): void => {
+			const trimmed = text.trim();
+			if ((!trimmed && attachments.length === 0) || !live || readOnly) return;
+
+			if (attachments.length === 0 && parsedSlash.kind === "command") {
+				executeSlashCommand(parsedSlash.def, parsedSlash.arg);
+				return;
+			}
+
+			const imgs = attachments.map(a => a.image);
+			if (trimmed) recordHistory(trimmed);
+			dispatchText(trimmed, followUp, imgs);
+			clearComposerDraft();
+		},
+		[attachments, clearComposerDraft, dispatchText, executeSlashCommand, live, parsedSlash, readOnly, recordHistory, text],
+	);
+
 	const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
 		if (e.key === "Escape") {
+			if (slashMenuOpen) {
+				e.preventDefault();
+				setSlashDismissed(true);
+				return;
+			}
 			e.currentTarget.blur();
 			return;
+		}
+
+		// Slash command menu navigation takes priority over history recall while open.
+		if (slashMenuOpen && filteredCommands.length > 0 && !(e.nativeEvent.isComposing || composingRef.current)) {
+			if (e.key === "ArrowDown" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+				e.preventDefault();
+				setSlashActiveIdx(i => (i + 1) % filteredCommands.length);
+				return;
+			}
+			if (e.key === "ArrowUp" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+				e.preventDefault();
+				setSlashActiveIdx(i => (i - 1 + filteredCommands.length) % filteredCommands.length);
+				return;
+			}
+			if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+				const selected = filteredCommands[clampedSlashIdx];
+				if (selected) {
+					e.preventDefault();
+					setText(selected.takesArgs ? `/${selected.name} ` : `/${selected.name}`);
+					return;
+				}
+			}
+			if (shouldSubmitOnEnter(e, composingRef.current) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+				const selected = filteredCommands[clampedSlashIdx];
+				if (selected) {
+					e.preventDefault();
+					if (parsedSlash.kind === "command" && parsedSlash.def.id === selected.id) {
+						executeSlashCommand(parsedSlash.def, parsedSlash.arg);
+					} else {
+						executeSlashCommand(selected, "");
+					}
+					return;
+				}
+			}
 		}
 
 		// Prompt history recall with ArrowUp / ArrowDown when input is empty or already browsing history.
@@ -617,6 +838,65 @@ export const Composer = memo(function Composer({
 
 	return (
 		<div className="sh-composer">
+			{slashMenuOpen && (
+				<div className="sh-slash-menu" role="listbox" aria-label="Web commands">
+					{bangCommand !== null ? (
+						<>
+							<div className="sh-slash-note">
+								<Terminal size={12} aria-hidden />
+								<span>
+									Collab relay has no direct shell bypass; run commands through the host coding agent instead.
+								</span>
+							</div>
+							{bangCommand.length > 0 && (
+								<button
+									type="button"
+									className="sh-slash-item sh-slash-item-active"
+									onClick={() => runBangViaHost(bangCommand)}
+								>
+									<span className="sh-slash-cmd">/run {bangCommand}</span>
+									<span className="sh-slash-tag sh-slash-tag-agent">agent</span>
+									<span className="sh-slash-desc">Ask host agent to run via bash tool</span>
+								</button>
+							)}
+						</>
+					) : filteredCommands.length > 0 ? (
+						filteredCommands.map((cmd, idx) => {
+							const active = idx === clampedSlashIdx;
+							const muted =
+								(cmd.requiresBusy && !busy) || (cmd.requiresQueue && totalQueued === 0);
+							return (
+								<button
+									key={cmd.id}
+									type="button"
+									role="option"
+									aria-selected={active}
+									className={`sh-slash-item${active ? " sh-slash-item-active" : ""}${muted ? " sh-slash-item-dim" : ""}`}
+									onMouseEnter={() => setSlashActiveIdx(idx)}
+									onClick={() =>
+										executeSlashCommand(
+											cmd,
+											parsedSlash.kind === "command" && parsedSlash.def.id === cmd.id ? parsedSlash.arg : "",
+											true,
+										)
+									}
+								>
+									<span className="sh-slash-cmd">{cmd.usage}</span>
+									<span className={`sh-slash-tag sh-slash-tag-${cmd.scope}`}>{cmd.scope}</span>
+									<span className="sh-slash-desc">{cmd.description}</span>
+								</button>
+							);
+						})
+					) : parsedSlash.kind === "unknown" ? (
+						<div className="sh-slash-note">
+							<Terminal size={12} aria-hidden />
+							<span>
+								<code>/{parsedSlash.rawName}</code> is only local to host TUI (CLI) — press Enter to send as a message, or use <code>/continue</code>, <code>/stop</code>, <code>/deliver</code>, <code>/steer</code>, <code>/queue</code>, <code>/run</code>.
+							</span>
+						</div>
+					) : null}
+				</div>
+			)}
 			{showQueueShelf && (
 				<div className="sh-queue-shelf" role="status" aria-live="polite">
 					<div className="sh-queue-head">
@@ -642,14 +922,8 @@ export const Composer = memo(function Composer({
 							{queuedPrompts.map((item, idx) => (
 								<li key={item.id} className="sh-queue-item">
 									<span className="sh-queue-idx">{idx + 1}.</span>
-									<span className="sh-queue-text">
-										{item.text || "(image attachment)"}
-									</span>
-									{item.images.length > 0 && (
-										<span className="sh-queue-meta">
-											+{item.images.length} img
-										</span>
-									)}
+									<span className="sh-queue-text">{item.text || "(image attachment)"}</span>
+									{item.images.length > 0 && <span className="sh-queue-meta">+{item.images.length} img</span>}
 								</li>
 							))}
 							{peerQueuedExtra > 0 && (
@@ -731,6 +1005,7 @@ export const Composer = memo(function Composer({
 						value={text}
 						onChange={e => {
 							historyIdxRef.current = -1;
+							setSlashDismissed(false);
 							setText(e.target.value);
 						}}
 						onKeyDown={onKeyDown}
@@ -740,8 +1015,8 @@ export const Composer = memo(function Composer({
 						placeholder={
 							live
 								? busy
-									? "Queue a follow-up…"
-									: "Prompt the host agent… (press /)"
+									? "Queue follow-up… or type /"
+									: "Prompt the host agent… or type /"
 								: "Waiting for the session…"
 						}
 						disabled={!canPrompt}

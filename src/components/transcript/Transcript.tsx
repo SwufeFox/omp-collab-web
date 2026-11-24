@@ -1,5 +1,6 @@
 import type {
 	AssistantMessage,
+	CustomMessageEntry,
 	ImageContent,
 	SessionEntry,
 	TextContent,
@@ -10,7 +11,7 @@ import { ArrowDown, Check, ChevronRight, Copy } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActiveTool, ConnectionPhase } from "../../lib/client";
-import { fmtClock, fmtTokens } from "../../lib/format";
+import { fmtClock, fmtTokens, messageText } from "../../lib/format";
 import type { PendingPrompt } from "../../lib/prompt-queue";
 import type { ToolRenderHost } from "../../tool-render";
 import type { ToolOpenSignal } from "../../tool-render/ToolView";
@@ -618,10 +619,80 @@ const AssistantTurnRow = memo(function AssistantTurnRow({
 	);
 }, assistantTurnEqual);
 
+function summarizeCustomContent(content: string | readonly (TextContent | ImageContent)[]): {
+	preview: string;
+	multilineOrLong: boolean;
+} {
+	const raw = messageText(content)
+		.replace(/<\/?[a-zA-Z][\w-]*\b[^>]*>/g, " ")
+		.trim();
+	const multilineOrLong = raw.includes("\n") || raw.length > 100;
+	const preview = raw.replace(/\s+/g, " ").trim();
+	return { preview, multilineOrLong };
+}
+
+function CustomMessageRow({
+	entry,
+	viewMode,
+	modeSignal,
+	onPreviewImage,
+}: {
+	entry: CustomMessageEntry;
+	viewMode: TranscriptViewMode;
+	modeSignal: ToolOpenSignal | undefined;
+	onPreviewImage?(src: string): void;
+}): ReactNode {
+	const { preview, multilineOrLong } = useMemo(() => summarizeCustomContent(entry.content), [entry.content]);
+	const isNotice = entry.customType === "system-notice" || entry.customType.endsWith("-notice");
+
+	const computeDefaultOpen = (mode: TranscriptViewMode): boolean => {
+		if (mode === "detailed") return true;
+		if (mode === "focus") return false;
+		return !isNotice && !multilineOrLong;
+	};
+
+	const [open, setOpen] = useState(() => computeDefaultOpen(viewMode));
+	const appliedSeqRef = useRef<number | undefined>(modeSignal?.seq);
+
+	useEffect(() => {
+		if (!modeSignal || modeSignal.seq === appliedSeqRef.current) return;
+		appliedSeqRef.current = modeSignal.seq;
+		setOpen(computeDefaultOpen(viewMode));
+	}, [modeSignal, viewMode, isNotice, multilineOrLong]);
+
+	return (
+		<div className={`tr-row tr-row--custom${open ? " tr-custom--open" : ""}`}>
+			<div className="tr-body">
+				<div className="tr-custom">
+					<button
+						type="button"
+						className="tr-custom-head"
+						onClick={() => setOpen(v => !v)}
+						aria-expanded={open}
+					>
+						<ChevronRight size={12} className={`tr-chev${open ? " tr-chev--open" : ""}`} aria-hidden />
+						<span className="tr-chip">{entry.customType}</span>
+						{!open && (
+							<span className="tr-custom-preview">{preview || "Click to expand details"}</span>
+						)}
+					</button>
+					{open && (
+						<div className="tr-custom-body">
+							<MsgContent content={entry.content} onPreviewImage={onPreviewImage} />
+						</div>
+					)}
+				</div>
+			</div>
+		</div>
+	);
+}
+
 interface SingleEntryProps {
 	entry: SessionEntry;
 	guestName?: string;
 	hostName?: string;
+	viewMode: TranscriptViewMode;
+	modeSignal: ToolOpenSignal | undefined;
 	onPreviewImage?(src: string): void;
 }
 
@@ -629,6 +700,8 @@ const SingleEntryRow = memo(function SingleEntryRow({
 	entry,
 	guestName,
 	hostName,
+	viewMode,
+	modeSignal,
 	onPreviewImage,
 }: SingleEntryProps): ReactNode {
 	const clock = fmtClock(entry.timestamp);
@@ -661,14 +734,12 @@ const SingleEntryRow = memo(function SingleEntryRow({
 			}
 			if (!entry.display) return null;
 			return (
-				<div className="tr-row tr-row--custom">
-					<div className="tr-body">
-						<div className="tr-custom">
-							<span className="tr-chip">{entry.customType}</span>
-							<MsgContent content={entry.content} onPreviewImage={onPreviewImage} />
-						</div>
-					</div>
-				</div>
+				<CustomMessageRow
+					entry={entry}
+					viewMode={viewMode}
+					modeSignal={modeSignal}
+					onPreviewImage={onPreviewImage}
+				/>
 			);
 		}
 		case "compaction":
@@ -1077,6 +1148,8 @@ export function Transcript(props: TranscriptProps): ReactNode {
 							entry={item.entry}
 							guestName={guestName}
 							hostName={hostName}
+							viewMode={viewMode}
+							modeSignal={modeSignal}
 							onPreviewImage={onPreviewImage}
 						/>
 					);

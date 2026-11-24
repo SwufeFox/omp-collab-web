@@ -110,6 +110,23 @@ describe("Composer host UI requests", () => {
 		expect(html).toContain("Deliver now");
 		expect(html).toContain("Queue");
 	});
+
+	it("renders the slash command palette when typing / in live composer", () => {
+		const html = renderToStaticMarkup(
+			<Composer
+				client={client}
+				phase="live"
+				readOnly={false}
+				uiRequest={null}
+				working={false}
+				queuedMessageCount={0}
+				initialText="/con"
+			/>,
+		);
+
+		expect(html).toContain("sh-slash-menu");
+		expect(html).toContain("/continue");
+	});
 });
 
 type KeyEvt = KeyboardEvent<HTMLTextAreaElement>;

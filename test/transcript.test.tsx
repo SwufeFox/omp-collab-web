@@ -334,4 +334,28 @@ describe("Transcript progressive disclosure & coalescing", () => {
 		expect(focusHtml).toContain("1 failed");
 		expect(focusHtml).not.toContain("ENOENT_DIAGNOSTIC_BODY");
 	});
+
+	it("collapses system-notice custom messages by default in standard mode and expands them in detailed mode", () => {
+		const noticeEntries: SessionEntry[] = [
+			{
+				type: "custom_message",
+				id: "sn-1",
+				parentId: null,
+				timestamp: "2026-07-15T00:00:00Z",
+				customType: "system-notice",
+				content: "Host workspace hook reminder.\nHIDDEN_DETAILED_NOTICE_BODY",
+				display: true,
+			},
+		];
+
+		const standardHtml = renderTranscript({ entries: noticeEntries, working: false, viewMode: "standard" });
+		expect(countElements(standardHtml, ".tr-custom-head")).toBe(1);
+		expect(standardHtml).toContain("system-notice");
+		expect(standardHtml).toContain("Host workspace hook reminder.");
+		expect(countElements(standardHtml, ".tr-custom-body")).toBe(0);
+
+		const detailedHtml = renderTranscript({ entries: noticeEntries, working: false, viewMode: "detailed" });
+		expect(countElements(detailedHtml, ".tr-custom-body")).toBe(1);
+		expect(detailedHtml).toContain("HIDDEN_DETAILED_NOTICE_BODY");
+	});
 });

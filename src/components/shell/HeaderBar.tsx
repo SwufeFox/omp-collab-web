@@ -149,7 +149,7 @@ export const HeaderBar = memo(function HeaderBar({
 	const ThemeIcon = THEME_ICON[preference];
 
 	return (
-		<header className="sh-header">
+		<header className={`sh-header${openMenu !== null ? " sh-header-open" : ""}`}>
 			<div className="sh-header-left">
 				<span className="sh-brand" aria-label="omp collab">
 					<OmpMark size={20} />
