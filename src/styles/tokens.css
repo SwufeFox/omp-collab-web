@@ -1,120 +1,119 @@
-/* Design tokens — Obsidian Studio (dark) & Alabaster Paper (light).
- * Dark is the default; `[data-theme="light"]` and the prefers-color-scheme fallback flip to light.
+/* Design tokens — Matte Carbon (dark) & Technical Paper (light).
+ * Precision engineering palette: neutral stone & carbon surfaces, solid-ink primary controls,
+ * and semantic signal colors reserved strictly for state and links.
  * The ONLY file allowed to contain raw color values. */
 :root {
 	color-scheme: dark;
 
-	/* surface ramp: page → panel → raised → overlay */
-	--bg: #0c0d10;
-	--panel: #12141a;
-	--bg-raised: #191c24;
-	--bg-inset: #0e1015;
-	--bg-overlay: #212530;
-	--glass: rgba(18, 20, 26, 0.86);
+	/* surface ramp: canvas → secondary plane → raised control → overlay */
+	--bg: #121211;
+	--panel: #181816;
+	--bg-raised: #1f1f1c;
+	--bg-inset: #0c0c0b;
+	--bg-overlay: #252522;
+	--glass: rgba(24, 24, 22, 0.92);
 	--hover: rgba(255, 255, 255, 0.045);
-	--selected: rgba(91, 155, 255, 0.12);
+	--selected: rgba(255, 255, 255, 0.08);
 
-	/* text */
-	--fg: #eceef4;
-	--fg-muted: #a2a9b8;
-	--fg-faint: #7e8696;
-	--fg-inverse: #0c0d10;
+	/* ink */
+	--fg: #ededeb;
+	--fg-muted: #a3a29c;
+	--fg-faint: #73726c;
+	--fg-inverse: #121211;
 
-	/* accent: authoritative cobalt-blue signal */
-	--accent-a: #38bdf8;
-	--accent-b: #6366f1;
-	--accent: #5b9bff;
-	--accent-fg: #ffffff;
-	--accent-muted: rgba(91, 155, 255, 0.14);
-	--accent-gradient: linear-gradient(120deg, #38bdf8, #5b9bff 55%, #818cf8);
-	--ambient-a: rgba(56, 189, 248, 0.05);
-	--ambient-b: rgba(99, 102, 241, 0.045);
+	/* semantic signal & link accent (not used for giant primary slabs) */
+	--accent-a: #60a5fa;
+	--accent-b: #38bdf8;
+	--accent: #60a5fa;
+	--accent-fg: #121211;
+	--accent-muted: rgba(96, 165, 250, 0.13);
+	--accent-gradient: linear-gradient(90deg, #60a5fa, #38bdf8);
 
-	/* omp mark gradient stops */
-	--mark-a: #38bdf8;
-	--mark-b: #5b9bff;
-	--mark-c: #818cf8;
+	/* omp mark stops — restrained monochrome-to-signal */
+	--mark-a: #ededeb;
+	--mark-b: #a3a29c;
+	--mark-c: #60a5fa;
 
-	/* status; green `--live` is reserved for real-time presence */
+	/* status signals */
 	--ok: #22c55e;
 	--live: #22c55e;
-	--warn: #eab308;
-	--err: #f43f5e;
+	--warn: #f59e0b;
+	--err: #f87171;
 
-	/* hairlines */
-	--border: rgba(255, 255, 255, 0.08);
-	--border-strong: rgba(255, 255, 255, 0.14);
-	--edge-top: rgba(255, 255, 255, 0.13);
-	--edge-bottom: rgba(255, 255, 255, 0.05);
-	--ring: #5b9bff;
-	--ring-soft: rgba(91, 155, 255, 0.22);
+	/* crisp hairlines */
+	--border: rgba(255, 255, 255, 0.085);
+	--border-strong: rgba(255, 255, 255, 0.15);
+	--edge-top: rgba(255, 255, 255, 0.18);
+	--edge-bottom: rgba(255, 255, 255, 0.06);
+	--ring: #60a5fa;
+	--ring-soft: rgba(96, 165, 250, 0.2);
 
-	/* type */
-	--font-ui: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-	--font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+	/* typography — technical grotesque + CJK fallbacks + tabular mono */
+	--font-ui:
+		"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+		"Microsoft YaHei UI", sans-serif;
+	--font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 
-	/* radii by role: chip · control · card · panel */
-	--radius-sm: 6px;
-	--radius: 10px;
-	--radius-lg: 14px;
-	--radius-xl: 18px;
+	/* disciplined architectural radii */
+	--radius-sm: 4px;
+	--radius: 6px;
+	--radius-lg: 8px;
+	--radius-xl: 10px;
 
-	--topbar-h: 54px;
+	--topbar-h: 46px;
 	--ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
-	--shadow-card: 0 1px 2px rgba(0, 0, 0, 0.42);
-	--shadow-overlay: 0 20px 56px rgba(0, 0, 0, 0.6), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
+	--shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+	--shadow-overlay: 0 16px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04);
 	--rail-mobile-shadow: -12px 0 32px rgba(0, 0, 0, 0.55);
-	--backdrop: rgba(6, 7, 10, 0.6);
+	--backdrop: rgba(8, 8, 7, 0.62);
 }
 
-/* Light theme — Alabaster Paper (explicit override). */
+/* Light theme — Technical Paper (explicit override). */
 [data-theme="light"] {
 	color-scheme: light;
 
-	--bg: #f6f7f9;
-	--panel: #ffffff;
-	--bg-raised: #f3f5f8;
-	--bg-inset: #f1f3f6;
+	--bg: #fafaf9;
+	--panel: #f3f3f0;
+	--bg-raised: #ffffff;
+	--bg-inset: #ededeb;
 	--bg-overlay: #ffffff;
-	--glass: rgba(255, 255, 255, 0.88);
-	--hover: rgba(17, 19, 24, 0.04);
-	--selected: rgba(37, 99, 235, 0.09);
+	--glass: rgba(250, 250, 249, 0.92);
+	--hover: rgba(24, 24, 22, 0.045);
+	--selected: rgba(24, 24, 22, 0.075);
 
-	--fg: #111318;
-	--fg-muted: #525866;
-	--fg-faint: #868d9c;
-	--fg-inverse: #ffffff;
+	--fg: #181816;
+	--fg-muted: #575652;
+	--fg-faint: #85847e;
+	--fg-inverse: #fafaf9;
 
-	--accent-a: #0284c7;
-	--accent-b: #4f46e5;
-	--accent: #2563eb;
+	--accent-a: #1d4ed8;
+	--accent-b: #0284c7;
+	--accent: #1d4ed8;
 	--accent-fg: #ffffff;
-	--accent-muted: rgba(37, 99, 235, 0.1);
-	--accent-gradient: linear-gradient(120deg, #0284c7, #2563eb 55%, #4f46e5);
-	--ambient-a: rgba(2, 132, 199, 0.045);
-	--ambient-b: rgba(79, 70, 229, 0.04);
+	--accent-muted: rgba(29, 78, 216, 0.09);
+	--accent-gradient: linear-gradient(90deg, #1d4ed8, #0284c7);
 
-	--mark-a: #0284c7;
-	--mark-b: #2563eb;
-	--mark-c: #4f46e5;
+	--mark-a: #181816;
+	--mark-b: #575652;
+	--mark-c: #1d4ed8;
 
-	--ok: #16a34a;
+	--ok: #15803d;
 	--live: #16a34a;
-	--warn: #ca8a04;
-	--err: #e11d48;
+	--warn: #b45309;
+	--err: #dc2626;
 
-	--border: rgba(17, 19, 24, 0.08);
-	--border-strong: rgba(17, 19, 24, 0.15);
-	--edge-top: rgba(17, 19, 24, 0.12);
-	--edge-bottom: rgba(17, 19, 24, 0.06);
-	--ring: #2563eb;
-	--ring-soft: rgba(37, 99, 235, 0.16);
+	--border: rgba(24, 24, 22, 0.09);
+	--border-strong: rgba(24, 24, 22, 0.16);
+	--edge-top: rgba(24, 24, 22, 0.22);
+	--edge-bottom: rgba(24, 24, 22, 0.08);
+	--ring: #1d4ed8;
+	--ring-soft: rgba(29, 78, 216, 0.15);
 
-	--shadow-card: 0 1px 3px rgba(17, 19, 24, 0.05);
-	--shadow-overlay: 0 20px 52px rgba(17, 19, 24, 0.14), 0 0 0 1px rgba(17, 19, 24, 0.04);
-	--rail-mobile-shadow: -12px 0 32px rgba(17, 19, 24, 0.12);
-	--backdrop: rgba(17, 19, 24, 0.28);
+	--shadow-card: 0 1px 2px rgba(24, 24, 22, 0.04);
+	--shadow-overlay: 0 14px 36px rgba(24, 24, 22, 0.12), 0 0 0 1px rgba(24, 24, 22, 0.05);
+	--rail-mobile-shadow: -12px 0 32px rgba(24, 24, 22, 0.12);
+	--backdrop: rgba(24, 24, 22, 0.28);
 }
 
 /* Light theme — system fallback when no explicit preference is stored. */
@@ -122,48 +121,46 @@
 	:root:not([data-theme]) {
 		color-scheme: light;
 
-		--bg: #f6f7f9;
-		--panel: #ffffff;
-		--bg-raised: #f3f5f8;
-		--bg-inset: #f1f3f6;
+		--bg: #fafaf9;
+		--panel: #f3f3f0;
+		--bg-raised: #ffffff;
+		--bg-inset: #ededeb;
 		--bg-overlay: #ffffff;
-		--glass: rgba(255, 255, 255, 0.88);
-		--hover: rgba(17, 19, 24, 0.04);
-		--selected: rgba(37, 99, 235, 0.09);
+		--glass: rgba(250, 250, 249, 0.92);
+		--hover: rgba(24, 24, 22, 0.045);
+		--selected: rgba(24, 24, 22, 0.075);
 
-		--fg: #111318;
-		--fg-muted: #525866;
-		--fg-faint: #868d9c;
-		--fg-inverse: #ffffff;
+		--fg: #181816;
+		--fg-muted: #575652;
+		--fg-faint: #85847e;
+		--fg-inverse: #fafaf9;
 
-		--accent-a: #0284c7;
-		--accent-b: #4f46e5;
-		--accent: #2563eb;
+		--accent-a: #1d4ed8;
+		--accent-b: #0284c7;
+		--accent: #1d4ed8;
 		--accent-fg: #ffffff;
-		--accent-muted: rgba(37, 99, 235, 0.1);
-		--accent-gradient: linear-gradient(120deg, #0284c7, #2563eb 55%, #4f46e5);
-		--ambient-a: rgba(2, 132, 199, 0.045);
-		--ambient-b: rgba(79, 70, 229, 0.04);
+		--accent-muted: rgba(29, 78, 216, 0.09);
+		--accent-gradient: linear-gradient(90deg, #1d4ed8, #0284c7);
 
-		--mark-a: #0284c7;
-		--mark-b: #2563eb;
-		--mark-c: #4f46e5;
+		--mark-a: #181816;
+		--mark-b: #575652;
+		--mark-c: #1d4ed8;
 
-		--ok: #16a34a;
+		--ok: #15803d;
 		--live: #16a34a;
-		--warn: #ca8a04;
-		--err: #e11d48;
+		--warn: #b45309;
+		--err: #dc2626;
 
-		--border: rgba(17, 19, 24, 0.08);
-		--border-strong: rgba(17, 19, 24, 0.15);
-		--edge-top: rgba(17, 19, 24, 0.12);
-		--edge-bottom: rgba(17, 19, 24, 0.06);
-		--ring: #2563eb;
-		--ring-soft: rgba(37, 99, 235, 0.16);
+		--border: rgba(24, 24, 22, 0.09);
+		--border-strong: rgba(24, 24, 22, 0.16);
+		--edge-top: rgba(24, 24, 22, 0.22);
+		--edge-bottom: rgba(24, 24, 22, 0.08);
+		--ring: #1d4ed8;
+		--ring-soft: rgba(29, 78, 216, 0.15);
 
-		--shadow-card: 0 1px 3px rgba(17, 19, 24, 0.05);
-		--shadow-overlay: 0 20px 52px rgba(17, 19, 24, 0.14), 0 0 0 1px rgba(17, 19, 24, 0.04);
-		--rail-mobile-shadow: -12px 0 32px rgba(17, 19, 24, 0.12);
-		--backdrop: rgba(17, 19, 24, 0.28);
+		--shadow-card: 0 1px 2px rgba(24, 24, 22, 0.04);
+		--shadow-overlay: 0 14px 36px rgba(24, 24, 22, 0.12), 0 0 0 1px rgba(24, 24, 22, 0.05);
+		--rail-mobile-shadow: -12px 0 32px rgba(24, 24, 22, 0.12);
+		--backdrop: rgba(24, 24, 22, 0.28);
 	}
 }

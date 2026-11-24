@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { memo } from "react";
 import { messageText } from "../../lib/format";
 import { type ToolRenderHost, ToolView } from "../../tool-render";
+import type { ToolOpenSignal } from "../../tool-render/ToolView";
 
 export interface ToolCardProps {
 	toolCallId: string;
@@ -12,12 +13,13 @@ export interface ToolCardProps {
 	result?: ToolResultMessage;
 	running?: boolean;
 	partialResult?: unknown;
+	openSignal?: ToolOpenSignal;
 	host?: ToolRenderHost;
 }
 
 /** Wire-type adapter over the shared per-tool renderer stack. */
 export const ToolCard = memo(function ToolCard(props: ToolCardProps): ReactNode {
-	const { name, intent, args, result, running, partialResult, host } = props;
+	const { name, intent, args, result, running, partialResult, openSignal, host } = props;
 	const partial =
 		running && !result ? (typeof partialResult === "string" ? partialResult : messageText(partialResult)) : "";
 	return (
@@ -28,6 +30,7 @@ export const ToolCard = memo(function ToolCard(props: ToolCardProps): ReactNode 
 			running={running}
 			intent={intent}
 			partial={partial || undefined}
+			openSignal={openSignal}
 			host={host}
 		/>
 	);

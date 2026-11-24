@@ -4,7 +4,7 @@ import type {
 	SubagentLifecyclePayload,
 	SubagentProgressPayload,
 } from "@oh-my-pi/pi-wire";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useEffect, useMemo, useState } from "react";
 import { fmtCost, fmtDuration, fmtTokens, relTime } from "../../lib/format";
@@ -86,8 +86,9 @@ export const AgentsPanel = memo(function AgentsPanel(props: {
 	lifecycle: ReadonlyMap<string, SubagentLifecyclePayload>;
 	selectedId: string | null;
 	onSelect(id: string | null): void;
+	onClose?(): void;
 }): ReactNode {
-	const { agents, progress, lifecycle, selectedId, onSelect } = props;
+	const { agents, progress, lifecycle, selectedId, onSelect, onClose } = props;
 	const now = useNow(1000);
 
 	const sorted = useMemo(() => {
@@ -105,6 +106,14 @@ export const AgentsPanel = memo(function AgentsPanel(props: {
 
 	return (
 		<div className="ag-panel">
+			{onClose && (
+				<div className="ag-rail-head">
+					<span className="ag-rail-title">Agents</span>
+					<button type="button" className="ag-iconbtn" aria-label="Close agents panel" onClick={onClose}>
+						<X size={16} aria-hidden />
+					</button>
+				</div>
+			)}
 			<div className="ag-heading">Session</div>
 			{sorted.mains.map(agent => (
 				<AgentRow

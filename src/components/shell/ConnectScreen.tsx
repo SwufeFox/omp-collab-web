@@ -58,7 +58,6 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 
 	return (
 		<div className="sh-connect">
-			<div className="sh-ambient" />
 			<header className="sh-connect-top">
 				<div className="sh-brand">
 					<OmpMark />

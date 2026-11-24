@@ -258,7 +258,13 @@ export const Composer = memo(function Composer({
 					onKeyDown={onKeyDown}
 					onCompositionStart={onCompositionStart}
 					onCompositionEnd={onCompositionEnd}
-					placeholder={live ? "Prompt the host agent… (press /)" : "Waiting for the session…"}
+					placeholder={
+						live
+							? busy
+								? "Queue a follow-up… (press /)"
+								: "Prompt the host agent… (press /)"
+							: "Waiting for the session…"
+					}
 					disabled={!canPrompt}
 					rows={1}
 					spellCheck={false}
@@ -285,9 +291,10 @@ export const Composer = memo(function Composer({
 						className="sh-btn sh-btn-primary"
 						onClick={send}
 						disabled={!canSend}
-						title="send (Enter)"
+						title={busy ? "queue follow-up (Enter)" : "send (Enter)"}
 					>
-						<SendHorizontal size={13} aria-hidden /> <span className="sh-btn-label">Send</span>
+						<SendHorizontal size={13} aria-hidden />{" "}
+						<span className="sh-btn-label">{busy ? "Queue" : "Send"}</span>
 					</button>
 				</div>
 			</div>

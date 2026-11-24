@@ -7,13 +7,14 @@ import { Composer } from "./components/shell/Composer";
 import { ConnectScreen } from "./components/shell/ConnectScreen";
 import { HeaderBar } from "./components/shell/HeaderBar";
 import { Toasts } from "./components/shell/Toasts";
-import { Transcript } from "./components/transcript/Transcript";
+import { Transcript, type TranscriptViewMode } from "./components/transcript/Transcript";
 import { GuestClient } from "./lib/client";
 import { useGuestSnapshot } from "./lib/use-guest";
 import type { ToolRenderHost } from "./tool-render";
 import "./components/shell/shell.css";
 
 const NAME_KEY = "omp.collab.name";
+const VIEW_MODE_KEY = "omp.collab.viewMode";
 
 interface Creds {
 	link: string;
@@ -26,6 +27,16 @@ function storedName(): string {
 	} catch {
 		return "guest";
 	}
+}
+
+function storedViewMode(): TranscriptViewMode {
+	try {
+		const raw = localStorage.getItem(VIEW_MODE_KEY);
+		if (raw === "focus" || raw === "standard" || raw === "detailed") return raw;
+	} catch {
+		// storage unavailable
+	}
+	return "standard";
 }
 
 /** Deep link = everything after the FIRST `#` (legacy links carry a second `#` inside the fragment). */
@@ -110,22 +121,31 @@ export function App(): ReactNode {
 	if (!client) {
 		return <ConnectScreen defaultName={storedName()} error={connectError} onConnect={connect} />;
 	}
-	return <Session client={client} onLeave={leave} onRejoin={rejoin} />;
+	return <Session client={client} guestName={credsRef.current?.name ?? storedName()} onLeave={leave} onRejoin={rejoin} />;
 }
 
 interface SessionProps {
 	client: GuestClient;
+	guestName: string;
 	onLeave(): void;
 	onRejoin(): void;
 }
 
-function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
+function Session({ client, guestName, onLeave, onRejoin }: SessionProps): ReactNode {
 	const snap = useGuestSnapshot(client);
 	const [railOpen, setRailOpen] = useState(false);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [viewState, setViewState] = useState<{ mode: TranscriptViewMode; seq: number }>(() => ({
+		mode: storedViewMode(),
+		seq: 0,
+	}));
 	const autoOpenedRef = useRef(false);
 
 	const subCount = useMemo(() => snap.agents.filter(a => a.kind === "sub").length, [snap.agents]);
+	const hostName = useMemo(
+		() => snap.state?.participants.find(p => p.role === "host")?.name,
+		[snap.state?.participants],
+	);
 
 	// Task-card agent chips drill into the same drawer the rail uses.
 	const agentIds = useMemo(() => new Set(snap.agents.map(a => a.id)), [snap.agents]);
@@ -139,11 +159,11 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 		[agentIds],
 	);
 
-	// Auto-open the rail on desktop the first time a subagent appears.
+	// Auto-open the rail on wide screens the first time a subagent appears.
 	useEffect(() => {
 		if (subCount > 0 && !autoOpenedRef.current) {
 			autoOpenedRef.current = true;
-			if (window.innerWidth > 900) {
+			if (window.innerWidth > 960) {
 				setRailOpen(true);
 			}
 		}
@@ -156,11 +176,19 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 
 	const drawerAgent = selectedId != null ? snap.agents.find(a => a.id === selectedId) : undefined;
 	const toggleRail = useCallback(() => setRailOpen(open => !open), []);
+	const closeRail = useCallback(() => setRailOpen(false), []);
 	const closeDrawer = useCallback(() => setSelectedId(null), []);
+	const changeViewMode = useCallback((mode: TranscriptViewMode) => {
+		setViewState(prev => ({ mode, seq: prev.seq + 1 }));
+		try {
+			localStorage.setItem(VIEW_MODE_KEY, mode);
+		} catch {
+			// storage unavailable
+		}
+	}, []);
 
 	return (
 		<div className="sh-app">
-			<div className="sh-ambient" />
 			<HeaderBar
 				header={snap.header}
 				state={snap.state}
@@ -168,6 +196,8 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 				readOnly={snap.readOnly}
 				subCount={subCount}
 				railOpen={railOpen}
+				viewMode={viewState.mode}
+				onChangeViewMode={changeViewMode}
 				onToggleRail={toggleRail}
 				onLeave={onLeave}
 			/>
@@ -180,6 +210,10 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 							streamDone={snap.streamDone}
 							activeTools={snap.activeTools}
 							working={snap.working}
+							viewMode={viewState.mode}
+							viewSeq={viewState.seq}
+							guestName={guestName}
+							hostName={hostName}
 							host={toolHost}
 							phase={snap.phase}
 						/>
@@ -195,14 +229,15 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 				</section>
 				{railOpen && (
 					<>
-						<div className="sh-rail-backdrop" onClick={() => setRailOpen(false)} />
-						<aside className="sh-rail">
+						<div className="sh-rail-backdrop" onClick={closeRail} />
+						<aside className="sh-rail" aria-label="Session agents">
 							<AgentsPanel
 								agents={snap.agents}
 								progress={snap.progress}
 								lifecycle={snap.lifecycle}
 								selectedId={selectedId}
 								onSelect={setSelectedId}
+								onClose={closeRail}
 							/>
 						</aside>
 					</>
@@ -217,6 +252,8 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 						lifecycle={snap.lifecycle.get(drawerAgent.id)}
 						client={client}
 						readOnly={snap.readOnly}
+						viewMode={viewState.mode}
+						viewSeq={viewState.seq}
 						host={toolHost}
 						onClose={closeDrawer}
 					/>

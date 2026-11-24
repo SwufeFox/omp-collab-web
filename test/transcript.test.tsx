@@ -55,6 +55,7 @@ function renderTranscript(props: {
 	entries?: readonly SessionEntry[];
 	activeTools?: ReadonlyMap<string, ActiveTool>;
 	working: boolean;
+	viewMode?: "focus" | "standard" | "detailed";
 }): string {
 	return renderToStaticMarkup(
 		<Transcript
@@ -63,6 +64,7 @@ function renderTranscript(props: {
 			streamDone={true}
 			activeTools={props.activeTools ?? new Map()}
 			working={props.working}
+			viewMode={props.viewMode}
 		/>,
 	);
 }
@@ -186,5 +188,117 @@ describe("Transcript windowing", () => {
 		expect(html).toContain("message-150-end");
 		expect(html).not.toContain("message-149-end");
 		expect(html).toContain("show 150 earlier");
+	});
+});
+
+describe("Transcript progressive disclosure & coalescing", () => {
+	const multiStepEntries: SessionEntry[] = [
+		{
+			type: "message",
+			id: "a1",
+			parentId: null,
+			timestamp: "2026-07-15T00:00:00Z",
+			message: {
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "call-1",
+						name: "read",
+						arguments: { path: "src/a.ts" },
+						intent: "Read a.ts",
+					},
+				],
+				model: "test/model",
+				usage: assistantUsage(),
+				stopReason: "toolUse",
+				timestamp: 1,
+			},
+		},
+		{
+			type: "message",
+			id: "r1",
+			parentId: "a1",
+			timestamp: "2026-07-15T00:00:01Z",
+			message: {
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "read",
+				content: [{ type: "text", text: "FIRST_OUTPUT_BODY" }],
+				isError: false,
+				timestamp: 2,
+			},
+		},
+		{
+			type: "message",
+			id: "a2",
+			parentId: "r1",
+			timestamp: "2026-07-15T00:00:02Z",
+			message: {
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "call-2",
+						name: "bash",
+						arguments: { command: "bun test" },
+						intent: "Run tests",
+					},
+				],
+				model: "test/model",
+				usage: assistantUsage(),
+				stopReason: "toolUse",
+				timestamp: 3,
+			},
+		},
+		{
+			type: "message",
+			id: "r2",
+			parentId: "a2",
+			timestamp: "2026-07-15T00:00:03Z",
+			message: {
+				role: "toolResult",
+				toolCallId: "call-2",
+				toolName: "bash",
+				content: [{ type: "text", text: "SECOND_OUTPUT_BODY" }],
+				isError: false,
+				timestamp: 4,
+			},
+		},
+		{
+			type: "message",
+			id: "a3",
+			parentId: "r2",
+			timestamp: "2026-07-15T00:00:04Z",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "All checks passed." }],
+				model: "test/model",
+				usage: assistantUsage(),
+				stopReason: "stop",
+				timestamp: 5,
+			},
+		},
+	];
+
+	it("coalesces consecutive assistant steps across toolResults and expands in standard mode", () => {
+		const html = renderTranscript({ entries: multiStepEntries, working: false, viewMode: "standard" });
+		expect(countElements(html, ".tr-row--assistant")).toBe(1);
+		expect(html).toContain("2 steps");
+		expect(countElements(html, ".tv-card")).toBe(2);
+		expect(countElements(html, ".tv-body")).toBe(0);
+	});
+
+	it("folds multi-step traces in focus mode and opens all outputs in detailed mode", () => {
+		const focusHtml = renderTranscript({ entries: multiStepEntries, working: false, viewMode: "focus" });
+		expect(countElements(focusHtml, ".tr-steps-collapsed")).toBe(1);
+		expect(focusHtml).toContain("2 steps");
+		expect(countElements(focusHtml, ".tv-card")).toBe(0);
+
+		const detailedHtml = renderTranscript({ entries: multiStepEntries, working: false, viewMode: "detailed" });
+		expect(countElements(detailedHtml, ".tv-card")).toBe(2);
+		expect(countElements(detailedHtml, ".tv-body")).toBe(2);
+		expect(detailedHtml).toContain("FIRST_OUTPUT_BODY");
+		expect(detailedHtml).toContain("SECOND_OUTPUT_BODY");
 	});
 });

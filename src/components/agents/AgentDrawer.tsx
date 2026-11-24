@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { GuestClient } from "../../lib/client";
 import { fmtCost, fmtDuration, fmtPercent, fmtTokens } from "../../lib/format";
 import { decideTranscriptPoll } from "../../lib/transcript-poll";
-import type { TranscriptProps } from "../transcript/Transcript";
+import type { TranscriptProps, TranscriptViewMode } from "../transcript/Transcript";
 import { Transcript } from "../transcript/Transcript";
 
 const EMPTY_TOOLS: TranscriptProps["activeTools"] = new Map();
@@ -20,11 +20,13 @@ export function AgentDrawer(props: {
 	client: GuestClient;
 	/** View-link guests: hide kill/revive/chat (the host rejects them anyway). */
 	readOnly?: boolean;
+	viewMode?: TranscriptViewMode;
+	viewSeq?: number;
 	/** Forwarded to tool renderers so nested task cards can drill further. */
 	host?: TranscriptProps["host"];
 	onClose(): void;
 }): ReactNode {
-	const { agent, progress, lifecycle, client, readOnly, host, onClose } = props;
+	const { agent, progress, lifecycle, client, readOnly, viewMode, viewSeq, host, onClose } = props;
 	const [entries, setEntries] = useState<readonly SessionEntry[]>([]);
 	const [fetchError, setFetchError] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
@@ -199,6 +201,8 @@ export function AgentDrawer(props: {
 							streamDone={false}
 							activeTools={EMPTY_TOOLS}
 							working={agent.status === "running" && fetchError === null}
+							viewMode={viewMode}
+							viewSeq={viewSeq}
 							host={host}
 						/>
 						{fetchError !== null ? (

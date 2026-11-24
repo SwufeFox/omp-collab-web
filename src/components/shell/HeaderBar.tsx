@@ -1,9 +1,11 @@
 import type { SessionHeader, SessionState } from "@oh-my-pi/pi-wire";
-import { Check, ChevronDown, Eye, Link2, LogOut, PanelRight } from "lucide-react";
+import { Check, ChevronDown, Eye, Link2, LogOut, Monitor, Moon, MoreHorizontal, PanelRight, Sun } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useEffect, useId, useRef, useState } from "react";
 import type { ConnectionPhase } from "../../lib/client";
 import { fmtPercent, shortenPath } from "../../lib/format";
+import { type ThemePreference, useThemePreference } from "../../lib/theme";
+import type { TranscriptViewMode } from "../transcript/Transcript";
 import { OmpMark } from "./OmpMark";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -15,6 +17,30 @@ const PHASE_LABEL: Record<ConnectionPhase, string> = {
 	ended: "Ended",
 };
 
+const VIEW_MODES: readonly { id: TranscriptViewMode; label: string; hint: string }[] = [
+	{ id: "focus", label: "Focus", hint: "Collapse settled step groups" },
+	{ id: "standard", label: "Standard", hint: "Keep latest & errors open" },
+	{ id: "detailed", label: "Detailed", hint: "Expand all steps & outputs" },
+];
+
+const NEXT_THEME: Record<ThemePreference, ThemePreference> = {
+	system: "light",
+	light: "dark",
+	dark: "system",
+};
+
+const THEME_LABEL: Record<ThemePreference, string> = {
+	system: "Theme: System",
+	light: "Theme: Light",
+	dark: "Theme: Dark",
+};
+
+const THEME_ICON = {
+	system: Monitor,
+	light: Sun,
+	dark: Moon,
+} as const;
+
 export interface HeaderBarProps {
 	header: SessionHeader | null;
 	state: SessionState | null;
@@ -22,6 +48,8 @@ export interface HeaderBarProps {
 	readOnly: boolean;
 	subCount: number;
 	railOpen: boolean;
+	viewMode: TranscriptViewMode;
+	onChangeViewMode(mode: TranscriptViewMode): void;
 	onToggleRail(): void;
 	onLeave(): void;
 }
@@ -34,13 +62,18 @@ export const HeaderBar = memo(function HeaderBar({
 	readOnly,
 	subCount,
 	railOpen,
+	viewMode,
+	onChangeViewMode,
 	onToggleRail,
 	onLeave,
 }: HeaderBarProps): ReactNode {
-	const [detailsOpen, setDetailsOpen] = useState(false);
+	const [openMenu, setOpenMenu] = useState<"details" | "more" | null>(null);
 	const [copied, setCopied] = useState(false);
 	const detailsRef = useRef<HTMLDivElement | null>(null);
-	const popoverId = useId();
+	const moreRef = useRef<HTMLDivElement | null>(null);
+	const detailsId = useId();
+	const moreId = useId();
+	const { preference, setPreference } = useThemePreference();
 
 	const title = header?.title ?? state?.sessionName ?? "session";
 	const usage = state?.contextUsage;
@@ -54,13 +87,15 @@ export const HeaderBar = memo(function HeaderBar({
 	}
 
 	useEffect(() => {
-		if (!detailsOpen) return;
+		if (!openMenu) return;
 		const onKeyDown = (e: KeyboardEvent): void => {
-			if (e.key === "Escape") setDetailsOpen(false);
+			if (e.key === "Escape") setOpenMenu(null);
 		};
 		const onPointerDown = (e: PointerEvent): void => {
-			if (detailsRef.current && !detailsRef.current.contains(e.target as Node)) {
-				setDetailsOpen(false);
+			const target = e.target as Node;
+			const anchor = openMenu === "details" ? detailsRef.current : moreRef.current;
+			if (anchor && !anchor.contains(target)) {
+				setOpenMenu(null);
 			}
 		};
 		window.addEventListener("keydown", onKeyDown);
@@ -69,7 +104,11 @@ export const HeaderBar = memo(function HeaderBar({
 			window.removeEventListener("keydown", onKeyDown);
 			window.removeEventListener("pointerdown", onPointerDown);
 		};
-	}, [detailsOpen]);
+	}, [openMenu]);
+
+	useEffect(() => {
+		if (railOpen) setOpenMenu(null);
+	}, [railOpen]);
 
 	useEffect(() => {
 		if (!copied) return;
@@ -87,12 +126,13 @@ export const HeaderBar = memo(function HeaderBar({
 	};
 
 	const clampedPct = pct != null ? Math.min(100, Math.max(0, pct)) : null;
+	const ThemeIcon = THEME_ICON[preference];
 
 	return (
 		<header className="sh-header">
 			<div className="sh-header-left">
 				<span className="sh-brand" aria-label="omp collab">
-					<OmpMark />
+					<OmpMark size={20} />
 				</span>
 				<span className="sh-title" title={title}>
 					{title}
@@ -104,13 +144,28 @@ export const HeaderBar = memo(function HeaderBar({
 				)}
 			</div>
 			<div className="sh-header-right">
+				<div className="sh-mode-group sh-desktop-only" role="group" aria-label="Detail level">
+					{VIEW_MODES.map(m => (
+						<button
+							key={m.id}
+							type="button"
+							className={`sh-mode-btn${viewMode === m.id ? " sh-mode-btn-active" : ""}`}
+							onClick={() => onChangeViewMode(m.id)}
+							aria-pressed={viewMode === m.id}
+							title={m.hint}
+						>
+							{m.label}
+						</button>
+					))}
+				</div>
+
 				<div className="sh-details-anchor" ref={detailsRef}>
 					<button
 						type="button"
-						className={`sh-status sh-status-${phase}${detailsOpen ? " sh-status-open" : ""}`}
-						onClick={() => setDetailsOpen(open => !open)}
-						aria-expanded={detailsOpen}
-						aria-controls={popoverId}
+						className={`sh-status sh-status-${phase}${openMenu === "details" ? " sh-status-open" : ""}`}
+						onClick={() => setOpenMenu(cur => (cur === "details" ? null : "details"))}
+						aria-expanded={openMenu === "details"}
+						aria-controls={detailsId}
 						title="Session details"
 					>
 						<span className={`sh-dot sh-dot-${phase}`} />
@@ -122,8 +177,8 @@ export const HeaderBar = memo(function HeaderBar({
 						)}
 						<ChevronDown size={13} className="sh-status-chev" aria-hidden />
 					</button>
-					{detailsOpen && (
-						<div id={popoverId} className="sh-popover" role="dialog" aria-label="Session details">
+					{openMenu === "details" && (
+						<div id={detailsId} className="sh-popover" role="dialog" aria-label="Session details">
 							<div className="sh-popover-row">
 								<span className="sh-popover-label">Status</span>
 								<span className="sh-popover-value">
@@ -202,14 +257,16 @@ export const HeaderBar = memo(function HeaderBar({
 
 				<button
 					type="button"
-					className={`sh-btn sh-btn-icon${copied ? " sh-btn-copied" : ""}`}
+					className={`sh-btn sh-btn-icon sh-desktop-only${copied ? " sh-btn-copied" : ""}`}
 					onClick={() => void copyInvite()}
 					title={copied ? "Invite link copied" : "Copy invite link"}
 					aria-label={copied ? "Copied" : "Copy invite link"}
 				>
 					{copied ? <Check size={15} aria-hidden /> : <Link2 size={15} aria-hidden />}
 				</button>
-				<ThemeToggle />
+				<div className="sh-desktop-only">
+					<ThemeToggle />
+				</div>
 				<button
 					type="button"
 					className={railOpen ? "sh-btn sh-btn-icon sh-btn-on" : "sh-btn sh-btn-icon"}
@@ -223,13 +280,75 @@ export const HeaderBar = memo(function HeaderBar({
 				</button>
 				<button
 					type="button"
-					className="sh-btn sh-btn-icon sh-btn-leave"
+					className="sh-btn sh-btn-icon sh-btn-leave sh-desktop-only"
 					onClick={onLeave}
 					title="Leave session"
 					aria-label="Leave session"
 				>
 					<LogOut size={15} aria-hidden />
 				</button>
+
+				<div className="sh-more-anchor sh-mobile-only" ref={moreRef}>
+					<button
+						type="button"
+						className={`sh-btn sh-btn-icon${openMenu === "more" ? " sh-btn-on" : ""}`}
+						onClick={() => setOpenMenu(cur => (cur === "more" ? null : "more"))}
+						aria-expanded={openMenu === "more"}
+						aria-controls={moreId}
+						aria-label="View options and session actions"
+					>
+						<MoreHorizontal size={16} aria-hidden />
+					</button>
+					{openMenu === "more" && (
+						<div id={moreId} className="sh-popover sh-popover-menu" role="dialog" aria-label="View and actions">
+							<div className="sh-popover-section-label">Detail level</div>
+							<div className="sh-mode-group sh-mode-group-full" role="group" aria-label="Detail level">
+								{VIEW_MODES.map(m => (
+									<button
+										key={m.id}
+										type="button"
+										className={`sh-mode-btn${viewMode === m.id ? " sh-mode-btn-active" : ""}`}
+										onClick={() => onChangeViewMode(m.id)}
+										aria-pressed={viewMode === m.id}
+									>
+										{m.label}
+									</button>
+								))}
+							</div>
+							<div className="sh-menu-sep" />
+							<button
+								type="button"
+								className="sh-menu-item"
+								onClick={() => {
+									void copyInvite();
+									setOpenMenu(null);
+								}}
+							>
+								{copied ? <Check size={15} aria-hidden /> : <Link2 size={15} aria-hidden />}
+								<span>{copied ? "Copied invite link" : "Copy invite link"}</span>
+							</button>
+							<button
+								type="button"
+								className="sh-menu-item"
+								onClick={() => setPreference(NEXT_THEME[preference])}
+							>
+								<ThemeIcon size={15} aria-hidden />
+								<span>{THEME_LABEL[preference]}</span>
+							</button>
+							<button
+								type="button"
+								className="sh-menu-item sh-menu-item-danger"
+								onClick={() => {
+									setOpenMenu(null);
+									onLeave();
+								}}
+							>
+								<LogOut size={15} aria-hidden />
+								<span>Leave session</span>
+							</button>
+						</div>
+					)}
+				</div>
 			</div>
 		</header>
 	);

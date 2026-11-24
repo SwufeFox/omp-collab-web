@@ -4,11 +4,16 @@
  */
 import { INTENT_FIELD, toolIntentLabel } from "@oh-my-pi/pi-wire";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { resolveToolRenderer } from "./registry";
 import type { ToolRenderHost, ToolRenderProps, ToolResultLike } from "./types";
 import { isRecord, replaceTabs, stripAnsi } from "./util";
 import "./tool-render.css";
+
+export interface ToolOpenSignal {
+	open: boolean;
+	seq: number;
+}
 
 export interface ToolViewProps {
 	name: string;
@@ -21,6 +26,8 @@ export interface ToolViewProps {
 	/** Streaming partial output tail while running. */
 	partial?: string;
 	defaultOpen?: boolean;
+	/** External batch expand/collapse signal; manual clicks continue to work freely afterward. */
+	openSignal?: ToolOpenSignal;
 	/** Host capabilities (sub-session drill-down, …). */
 	host?: ToolRenderHost;
 }
@@ -69,7 +76,15 @@ function toolCommandRecords(result: ToolResultLike | undefined): ToolCommandReco
 }
 
 export function ToolView(props: ToolViewProps): ReactNode {
-	const [open, setOpen] = useState(props.defaultOpen ?? false);
+	const [open, setOpen] = useState(props.defaultOpen ?? props.openSignal?.open ?? false);
+	const appliedSeqRef = useRef<number | undefined>(props.openSignal?.seq);
+
+	useEffect(() => {
+		const sig = props.openSignal;
+		if (!sig || sig.seq === appliedSeqRef.current) return;
+		appliedSeqRef.current = sig.seq;
+		setOpen(sig.open);
+	}, [props.openSignal]);
 	const { args, intent: argIntent } = normalizeArgs(props.args);
 	const intent = props.intent?.trim() || argIntent;
 	const label = intent ? toolIntentLabel(intent) : undefined;

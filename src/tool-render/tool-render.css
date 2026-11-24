@@ -20,23 +20,31 @@
 	--tv-ring: var(--ring, oklch(0.817 0.112 205 / 70%));
 	--tv-mono: var(--font-mono, ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace);
 
-	border: 1px solid var(--tv-border);
-	border-radius: 10px;
+	border: 1px solid transparent;
+	border-radius: 6px;
 	font-family: var(--tv-mono);
 	font-size: 12px;
 	line-height: 1.5;
 	color: var(--tv-fg);
 	isolation: isolate;
 	overflow: hidden;
-	transition: border-color 140ms ease-out;
+	transition:
+		border-color 120ms ease-out,
+		background-color 120ms ease-out;
 }
 
 .tv-card:hover {
-	border-color: var(--border-strong, var(--tv-border));
+	background: var(--hover, color-mix(in oklch, var(--tv-fg) 4%, transparent));
+}
+
+.tv-card:has(> .tv-head[aria-expanded="true"]) {
+	border-color: var(--tv-border);
+	background: var(--tv-raised);
 }
 
 .tv-card--error {
-	border-color: color-mix(in oklch, var(--tv-err) 40%, var(--tv-border));
+	border-color: color-mix(in oklch, var(--tv-err) 38%, var(--tv-border));
+	background: color-mix(in oklch, var(--tv-err) 4%, transparent);
 }
 
 /* ---- header ---- */
@@ -46,7 +54,7 @@
 	align-items: center;
 	gap: 8px;
 	width: 100%;
-	padding: 7px 11px;
+	padding: 4px 8px;
 	background: none;
 	border: 0;
 	font: inherit;
@@ -57,8 +65,12 @@
 	-webkit-tap-highlight-color: transparent;
 }
 
+.tv-card:has(> .tv-head[aria-expanded="true"]) > .tv-head {
+	padding: 6px 10px;
+}
+
 .tv-head:hover {
-	background: color-mix(in oklch, var(--tv-fg) 4%, transparent);
+	background: color-mix(in oklch, var(--tv-fg) 3.5%, transparent);
 }
 
 .tv-head:focus-visible {

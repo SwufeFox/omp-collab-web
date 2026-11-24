@@ -1,13 +1,23 @@
-import type { AssistantMessage, ImageContent, SessionEntry, TextContent, ToolResultMessage } from "@oh-my-pi/pi-wire";
+import type {
+	AssistantMessage,
+	ImageContent,
+	SessionEntry,
+	TextContent,
+	ToolCallContent,
+	ToolResultMessage,
+} from "@oh-my-pi/pi-wire";
 import { ArrowDown, Check, ChevronRight, Copy } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActiveTool, ConnectionPhase } from "../../lib/client";
 import { fmtClock, fmtTokens } from "../../lib/format";
 import type { ToolRenderHost } from "../../tool-render";
+import type { ToolOpenSignal } from "../../tool-render/ToolView";
 import { Markdown, StreamingMarkdown } from "./Markdown";
 import { ToolCard } from "./ToolCard";
 import "./transcript.css";
+
+export type TranscriptViewMode = "focus" | "standard" | "detailed";
 
 export interface TranscriptProps {
 	entries: readonly SessionEntry[];
@@ -15,10 +25,18 @@ export interface TranscriptProps {
 	streamDone: boolean;
 	activeTools: ReadonlyMap<string, ActiveTool>;
 	working: boolean;
-	compact?: boolean; // dense variant for the agent drawer
+	compact?: boolean; // dense variant for the agent inspector
+	/** Progressive disclosure preset: focus (prose-first), standard (smart), detailed (all open). */
+	viewMode?: TranscriptViewMode;
+	/** Monotonic counter bumped whenever the user explicitly toggles viewMode. */
+	viewSeq?: number;
+	/** Current guest display name, used to highlight the user's own prompts. */
+	guestName?: string;
+	/** Host participant display name if known. */
+	hostName?: string;
 	/** Sub-session drill-down capabilities forwarded to tool renderers. */
 	host?: ToolRenderHost;
-	/** Main connection phase; absent for the agent drawer's compact transcript. */
+	/** Main connection phase; absent for the agent inspector's compact transcript. */
 	phase?: ConnectionPhase;
 }
 
@@ -43,38 +61,20 @@ export function updateTranscriptTailLock(element: ScrollGeometry, lock: TailLock
 	lock.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 40;
 }
 
-function isAssistantEntry(entry: SessionEntry): boolean {
-	return entry.type === "message" && entry.message.role === "assistant";
-}
-
-function willEntryRender(entry: SessionEntry): boolean {
-	switch (entry.type) {
-		case "message":
-			return entry.message.role === "user" || entry.message.role === "assistant";
-		case "custom_message":
-			return entry.customType === "collab-prompt" || entry.display;
-		case "compaction":
-		case "branch_summary":
-		case "model_change":
-		case "thinking_level_change":
-			return true;
-		default:
-			return false;
-	}
-}
-
 function fmtFullTime(iso: string | undefined): string | undefined {
 	if (!iso) return undefined;
 	const d = new Date(iso);
 	return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
-function extractPlainText(message: AssistantMessage): string {
-	return message.content
-		.filter((b): b is TextContent => b.type === "text")
-		.map(b => b.text)
-		.join("\n\n")
-		.trim();
+function extractPlainText(messages: readonly AssistantMessage[]): string {
+	const parts: string[] = [];
+	for (const msg of messages) {
+		for (const block of msg.content) {
+			if (block.type === "text" && block.text.length > 0) parts.push(block.text);
+		}
+	}
+	return parts.join("\n\n").trim();
 }
 
 function CopyTurnButton({ text }: { text: string }): ReactNode {
@@ -103,56 +103,41 @@ function CopyTurnButton({ text }: { text: string }): ReactNode {
 			title={copied ? "Copied" : "Copy response"}
 			aria-label={copied ? "Copied response" : "Copy response"}
 		>
-			{copied ? <Check size={12} aria-hidden /> : <Copy size={12} aria-hidden />}
+			{copied ? <Check size={11} aria-hidden /> : <Copy size={11} aria-hidden />}
 			<span>{copied ? "Copied" : "Copy"}</span>
 		</button>
 	);
 }
 
-function Row({
-	kind,
-	gutter,
-	time,
-	title,
-	continued,
-	actions,
-	children,
+function ThinkingBlock({
+	text,
+	redacted,
+	openSignal,
 }: {
-	kind: "user" | "assistant" | "custom" | "marker";
-	gutter: ReactNode;
-	time?: string;
-	title?: string;
-	continued?: boolean;
-	actions?: ReactNode;
-	children: ReactNode;
+	text: string;
+	redacted?: boolean;
+	openSignal?: ToolOpenSignal;
 }): ReactNode {
-	const showSender = gutter !== "" && !continued;
-	const hasHeader = showSender || actions !== undefined;
-	return (
-		<div className={`tr-row tr-row--${kind}${continued ? " tr-row--continued" : ""}`}>
-			{hasHeader && (
-				<div className="tr-row-head">
-					{showSender && (
-						<div className="tr-row-sender" title={title}>
-							<div className="tr-gutter">{gutter}</div>
-							{time && <span className="tr-time">{time}</span>}
-						</div>
-					)}
-					{actions}
-				</div>
-			)}
-			<div className="tr-body">{children}</div>
-		</div>
-	);
-}
+	const [open, setOpen] = useState(openSignal?.open ?? false);
+	const appliedSeqRef = useRef<number | undefined>(openSignal?.seq);
 
-function ThinkingBlock({ text, redacted }: { text: string; redacted?: boolean }): ReactNode {
-	const [open, setOpen] = useState(false);
+	useEffect(() => {
+		if (!openSignal || openSignal.seq === appliedSeqRef.current) return;
+		appliedSeqRef.current = openSignal.seq;
+		setOpen(openSignal.open);
+	}, [openSignal]);
+
+	const preview = useMemo(() => {
+		if (redacted) return "Redacted by provider";
+		return text.replace(/\s+/g, " ").trim();
+	}, [text, redacted]);
+
 	return (
-		<div className="tr-think">
+		<div className={`tr-think${open ? " tr-think--open" : ""}`}>
 			<button type="button" className="tr-think-head" onClick={() => setOpen(v => !v)} aria-expanded={open}>
 				<ChevronRight size={12} className={`tr-chev${open ? " tr-chev--open" : ""}`} aria-hidden />
-				<span>Thinking{redacted ? " (redacted)" : ""}</span>
+				<span className="tr-think-label">{redacted ? "Thought (redacted)" : "Thought"}</span>
+				{!open && preview && <span className="tr-think-preview">{preview}</span>}
 			</button>
 			{open && <div className="tr-think-body">{redacted ? "(redacted by provider)" : text}</div>}
 		</div>
@@ -185,60 +170,272 @@ function MsgContent({ content }: { content: string | readonly (TextContent | Ima
 	);
 }
 
+type ExecItem =
+	| { kind: "thinking"; key: string; text: string; redacted?: boolean }
+	| {
+			kind: "tool";
+			key: string;
+			block: ToolCallContent;
+			act: ActiveTool | undefined;
+			result: ToolResultMessage | undefined;
+			running: boolean;
+			isError: boolean;
+	  };
+
+type ContentSegment =
+	| { kind: "text"; key: string; text: string }
+	| { kind: "exec"; key: string; items: ExecItem[] };
+
+function summarizeExecItems(items: readonly ExecItem[]): string {
+	const counts = new Map<string, number>();
+	for (const item of items) {
+		const label = item.kind === "thinking" ? "thought" : item.block.name;
+		counts.set(label, (counts.get(label) ?? 0) + 1);
+	}
+	const parts: string[] = [];
+	for (const [name, count] of counts) {
+		parts.push(count > 1 ? `${name} ×${count}` : name);
+	}
+	return parts.join(", ");
+}
+
+function renderExecItem(
+	item: ExecItem,
+	host: ToolRenderHost | undefined,
+	openSignal: ToolOpenSignal | undefined,
+): ReactNode {
+	if (item.kind === "thinking") {
+		return <ThinkingBlock key={item.key} text={item.text} redacted={item.redacted} openSignal={openSignal} />;
+	}
+	const { block, act, result, running } = item;
+	const args = act?.args ?? block.arguments;
+	return (
+		<ToolCard
+			key={item.key}
+			toolCallId={block.id}
+			name={block.name}
+			intent={block.intent ?? act?.intent}
+			args={args}
+			result={result}
+			host={host}
+			running={running}
+			partialResult={act?.partialResult}
+			openSignal={openSignal}
+		/>
+	);
+}
+
+function ExecutionGroup({
+	items,
+	viewMode,
+	modeSignal,
+	isLatestAssistant,
+	host,
+}: {
+	items: readonly ExecItem[];
+	viewMode: TranscriptViewMode;
+	modeSignal: ToolOpenSignal | undefined;
+	isLatestAssistant: boolean;
+	host?: ToolRenderHost;
+}): ReactNode {
+	const hasRunning = items.some(it => it.kind === "tool" && it.running);
+	const errorCount = items.filter(it => it.kind === "tool" && it.isError).length;
+
+	const computeDefaultExpanded = (mode: TranscriptViewMode): boolean => {
+		if (mode === "focus") return false;
+		if (mode === "detailed") return true;
+		// Standard mode: keep active, failed, or latest-turn steps open; fold older multi-step bursts.
+		return hasRunning || errorCount > 0 || isLatestAssistant;
+	};
+
+	const [expanded, setExpanded] = useState(() => computeDefaultExpanded(viewMode));
+	const [localSignal, setLocalSignal] = useState<ToolOpenSignal | undefined>(undefined);
+	const [outputsOpen, setOutputsOpen] = useState(viewMode === "detailed");
+	const lastModeSeqRef = useRef<number | undefined>(modeSignal?.seq);
+
+	useEffect(() => {
+		if (!modeSignal || modeSignal.seq === lastModeSeqRef.current) return;
+		lastModeSeqRef.current = modeSignal.seq;
+		setExpanded(computeDefaultExpanded(viewMode));
+		setOutputsOpen(modeSignal.open);
+		setLocalSignal(undefined);
+	}, [modeSignal, viewMode, hasRunning, errorCount, isLatestAssistant]);
+
+	useEffect(() => {
+		if (hasRunning && viewMode !== "focus" && !expanded) setExpanded(true);
+	}, [hasRunning, viewMode, expanded]);
+
+	const effectiveSignal = localSignal ?? modeSignal;
+
+	// Single item: render directly as a 1-line collapsible row (no redundant "1 step" indirection).
+	if (items.length === 1) {
+		return <>{renderExecItem(items[0]!, host, effectiveSignal)}</>;
+	}
+
+	const stepWord = `${items.length} steps`;
+	const summary = summarizeExecItems(items);
+
+	if (!expanded) {
+		return (
+			<button
+				type="button"
+				className={`tr-steps-collapsed${errorCount > 0 ? " tr-steps-collapsed--err" : ""}`}
+				onClick={() => setExpanded(true)}
+				aria-expanded={false}
+			>
+				<ChevronRight size={12} className="tr-chev" aria-hidden />
+				{hasRunning && <span className="tr-steps-live-dot" aria-label="running" />}
+				<span className="tr-steps-count">{stepWord}</span>
+				<span className="tr-steps-summary">{summary}</span>
+				{errorCount > 0 && <span className="tr-steps-err-badge">{errorCount} failed</span>}
+			</button>
+		);
+	}
+
+	const toggleOutputs = (): void => {
+		const next = !outputsOpen;
+		setOutputsOpen(next);
+		setLocalSignal(prev => ({ open: next, seq: (prev?.seq ?? modeSignal?.seq ?? 0) + 1000 }));
+	};
+
+	return (
+		<div className="tr-steps">
+			<div className="tr-steps-bar">
+				<button
+					type="button"
+					className="tr-steps-toggle"
+					onClick={() => setExpanded(false)}
+					aria-expanded={true}
+				>
+					<ChevronRight size={12} className="tr-chev tr-chev--open" aria-hidden />
+					<span className="tr-steps-count">{stepWord}</span>
+					{errorCount > 0 && <span className="tr-steps-err-badge">{errorCount} failed</span>}
+				</button>
+				<button type="button" className="tr-steps-detail-btn" onClick={toggleOutputs}>
+					{outputsOpen ? "Fold outputs" : "Expand outputs"}
+				</button>
+			</div>
+			<div className="tr-steps-rail">
+				{items.map(item => renderExecItem(item, host, effectiveSignal))}
+			</div>
+		</div>
+	);
+}
+
 function AssistantBody({
-	message,
+	messages,
 	results,
 	active,
 	pending,
+	viewMode,
+	modeSignal,
+	isLatestAssistant,
 	host,
 }: {
-	message: AssistantMessage;
+	messages: readonly AssistantMessage[];
 	results: ReadonlyMap<string, ToolResultMessage>;
 	active: ReadonlyMap<string, ActiveTool>;
 	/** Still streaming — suppress stop-reason chips on the partial message. */
 	pending: boolean;
+	viewMode: TranscriptViewMode;
+	modeSignal: ToolOpenSignal | undefined;
+	isLatestAssistant: boolean;
 	host?: ToolRenderHost;
 }): ReactNode {
-	const blocks = message.content.map((block, i) => {
-		switch (block.type) {
-			case "thinking":
-				return <ThinkingBlock key={i} text={block.thinking} />;
-			case "redactedThinking":
-				return <ThinkingBlock key={i} text="" redacted />;
-			case "text":
-				return pending ? <StreamingMarkdown key={i} text={block.text} /> : <Markdown key={i} text={block.text} />;
-			case "toolCall": {
-				const act = active.get(block.id);
-				const result = results.get(block.id);
-				const args = act?.args ?? block.arguments;
-				return (
-					<ToolCard
-						key={block.id}
-						toolCallId={block.id}
-						name={block.name}
-						intent={block.intent ?? act?.intent}
-						args={args}
-						result={result}
-						host={host}
-						running={!result && (act !== undefined || pending)}
-						partialResult={act?.partialResult}
-					/>
-				);
+	const segments = useMemo<ContentSegment[]>(() => {
+		const out: ContentSegment[] = [];
+		let currentExec: ExecItem[] | null = null;
+
+		const flushExec = () => {
+			if (currentExec && currentExec.length > 0) {
+				out.push({ kind: "exec", key: `exec-${out.length}`, items: currentExec });
+				currentExec = null;
 			}
-			default:
-				return null;
-		}
-	});
-	const stop = message.stopReason;
+		};
+
+		messages.forEach((msg, mIdx) => {
+			msg.content.forEach((block, i) => {
+				switch (block.type) {
+					case "thinking":
+						currentExec ??= [];
+						currentExec.push({ kind: "thinking", key: `think-${mIdx}-${i}`, text: block.thinking });
+						break;
+					case "redactedThinking":
+						currentExec ??= [];
+						currentExec.push({ kind: "thinking", key: `rthink-${mIdx}-${i}`, text: "", redacted: true });
+						break;
+					case "toolCall": {
+						currentExec ??= [];
+						const act = active.get(block.id);
+						const result = results.get(block.id);
+						const running = !result && (act !== undefined || pending);
+						const isError = result?.isError === true;
+						currentExec.push({
+							kind: "tool",
+							key: block.id,
+							block,
+							act,
+							result,
+							running,
+							isError,
+						});
+						break;
+					}
+					case "text":
+						if (block.text.length > 0) {
+							flushExec();
+							out.push({ kind: "text", key: `text-${mIdx}-${i}`, text: block.text });
+						}
+						break;
+					default:
+						break;
+				}
+			});
+		});
+		flushExec();
+		return out;
+	}, [messages, active, results, pending]);
+
+	const plainText = useMemo(() => (pending ? "" : extractPlainText(messages)), [messages, pending]);
+	const lastMsg = messages[messages.length - 1];
+	const stop = lastMsg?.stopReason;
 	const failed = !pending && (stop === "error" || stop === "aborted");
+
 	return (
 		<>
-			{blocks}
-			{failed && (
+			{segments.map((seg, idx) => {
+				if (seg.kind === "exec") {
+					return (
+						<ExecutionGroup
+							key={seg.key}
+							items={seg.items}
+							viewMode={viewMode}
+							modeSignal={modeSignal}
+							isLatestAssistant={isLatestAssistant || pending}
+							host={host}
+						/>
+					);
+				}
+				const isLastText =
+					!pending &&
+					plainText.length > 0 &&
+					segments.slice(idx + 1).every(later => later.kind !== "text");
+				return (
+					<div key={seg.key} className="tr-prose-block">
+						{pending ? <StreamingMarkdown text={seg.text} /> : <Markdown text={seg.text} />}
+						{isLastText && (
+							<div className="tr-prose-actions">
+								<CopyTurnButton text={plainText} />
+							</div>
+						)}
+					</div>
+				);
+			})}
+			{failed && lastMsg && (
 				<div className="tr-stop">
 					<span className={`tr-chip ${stop === "error" ? "tr-chip--err" : "tr-chip--warn"}`}>{stop}</span>
-					{message.errorMessage !== undefined && message.errorMessage.length > 0 && (
-						<span className="tr-stop-msg">{message.errorMessage}</span>
+					{lastMsg.errorMessage !== undefined && lastMsg.errorMessage.length > 0 && (
+						<span className="tr-stop-msg">{lastMsg.errorMessage}</span>
 					)}
 				</div>
 			)}
@@ -246,60 +443,156 @@ function AssistantBody({
 	);
 }
 
-interface EntryRowProps {
-	entry: SessionEntry;
+function ExpandableSummaryDivider({
+	label,
+	subtitle,
+	summary,
+}: {
+	label: string;
+	subtitle?: string;
+	summary: string;
+}): ReactNode {
+	const [open, setOpen] = useState(false);
+	const hasSummary = summary.trim().length > 0;
+
+	if (!hasSummary) {
+		return (
+			<div className="tr-divider">
+				<span>{label}</span>
+			</div>
+		);
+	}
+
+	return (
+		<div className={`tr-compaction${open ? " tr-compaction--open" : ""}`}>
+			<div className="tr-divider">
+				<button
+					type="button"
+					className="tr-divider-btn"
+					onClick={() => setOpen(v => !v)}
+					aria-expanded={open}
+				>
+					<ChevronRight size={11} className={`tr-chev${open ? " tr-chev--open" : ""}`} aria-hidden />
+					<span>{label}</span>
+					{subtitle && !open && <span className="tr-divider-sub">— {subtitle}</span>}
+				</button>
+			</div>
+			{open && (
+				<div className="tr-compaction-body">
+					<Markdown text={summary} />
+				</div>
+			)}
+		</div>
+	);
+}
+
+interface PromptRowProps {
+	sender: ReactNode;
+	isSelf?: boolean;
+	isHost?: boolean;
+	time?: string;
+	title?: string;
+	children: ReactNode;
+}
+
+function PromptRow({ sender, isSelf, isHost, time, title, children }: PromptRowProps): ReactNode {
+	return (
+		<div
+			className={`tr-row tr-row--user${isSelf ? " tr-row--self" : ""}${isHost ? " tr-row--host" : ""}`}
+		>
+			<div className="tr-row-head">
+				<div className="tr-row-sender" title={title}>
+					<span className="tr-gutter">{sender}</span>
+					{isSelf && <span className="tr-you-tag">you</span>}
+					{time && <span className="tr-time">{time}</span>}
+				</div>
+			</div>
+			<div className="tr-body">{children}</div>
+		</div>
+	);
+}
+
+type AssistantEntry = Extract<SessionEntry, { type: "message" }> & { message: AssistantMessage };
+
+interface AssistantTurnProps {
+	entries: readonly AssistantEntry[];
 	results: ReadonlyMap<string, ToolResultMessage>;
 	active: ReadonlyMap<string, ActiveTool>;
-	continued: boolean;
+	isLatestAssistant: boolean;
+	viewMode: TranscriptViewMode;
+	modeSignal: ToolOpenSignal | undefined;
 	host?: ToolRenderHost;
 }
 
-/** Re-render only when the entry itself, grouping, or one of its tool pairings changed. */
-function entryRowEqual(prev: EntryRowProps, next: EntryRowProps): boolean {
-	if (prev.entry !== next.entry || prev.host !== next.host || prev.continued !== next.continued) return false;
-	const e = next.entry;
-	if (e.type !== "message" || e.message.role !== "assistant") return true;
-	for (const block of e.message.content) {
-		if (block.type !== "toolCall") continue;
-		if (prev.results.get(block.id) !== next.results.get(block.id)) return false;
-		if (prev.active.get(block.id) !== next.active.get(block.id)) return false;
+function assistantTurnEqual(prev: AssistantTurnProps, next: AssistantTurnProps): boolean {
+	if (
+		prev.entries.length !== next.entries.length ||
+		prev.host !== next.host ||
+		prev.isLatestAssistant !== next.isLatestAssistant ||
+		prev.viewMode !== next.viewMode ||
+		prev.modeSignal !== next.modeSignal
+	) {
+		return false;
+	}
+	for (let i = 0; i < next.entries.length; i++) {
+		const pe = prev.entries[i]!;
+		const ne = next.entries[i]!;
+		if (pe !== ne) return false;
+		for (const block of ne.message.content) {
+			if (block.type !== "toolCall") continue;
+			if (prev.results.get(block.id) !== next.results.get(block.id)) return false;
+			if (prev.active.get(block.id) !== next.active.get(block.id)) return false;
+		}
 	}
 	return true;
 }
 
-const EntryRow = memo(function EntryRow({ entry, results, active, continued, host }: EntryRowProps): ReactNode {
+const AssistantTurnRow = memo(function AssistantTurnRow({
+	entries,
+	results,
+	active,
+	isLatestAssistant,
+	viewMode,
+	modeSignal,
+	host,
+}: AssistantTurnProps): ReactNode {
+	const messages = useMemo(() => entries.map(e => e.message), [entries]);
+	return (
+		<div className="tr-row tr-row--assistant">
+			<div className="tr-body">
+				<AssistantBody
+					messages={messages}
+					results={results}
+					active={active}
+					pending={false}
+					viewMode={viewMode}
+					modeSignal={modeSignal}
+					isLatestAssistant={isLatestAssistant}
+					host={host}
+				/>
+			</div>
+		</div>
+	);
+}, assistantTurnEqual);
+
+interface SingleEntryProps {
+	entry: SessionEntry;
+	guestName?: string;
+	hostName?: string;
+}
+
+const SingleEntryRow = memo(function SingleEntryRow({ entry, guestName, hostName }: SingleEntryProps): ReactNode {
 	const clock = fmtClock(entry.timestamp);
 	const fullTime = fmtFullTime(entry.timestamp);
 
 	switch (entry.type) {
 		case "message": {
-			const msg = entry.message;
-			switch (msg.role) {
-				case "user":
-					return (
-						<Row kind="user" gutter="Host" time={clock} title={fullTime}>
-							<MsgContent content={msg.content} />
-						</Row>
-					);
-				case "assistant": {
-					const plainText = extractPlainText(msg);
-					return (
-						<Row
-							kind="assistant"
-							gutter="Agent"
-							time={clock}
-							title={fullTime}
-							continued={continued}
-							actions={plainText ? <CopyTurnButton text={plainText} /> : undefined}
-						>
-							<AssistantBody message={msg} results={results} active={active} pending={false} host={host} />
-						</Row>
-					);
-				}
-				default:
-					// toolResult entries are consumed via pairing; developer & unknown roles skipped
-					return null;
-			}
+			if (entry.message.role !== "user") return null;
+			return (
+				<PromptRow sender={hostName || "Host"} isHost time={clock} title={fullTime}>
+					<MsgContent content={entry.message.content} />
+				</PromptRow>
+			);
 		}
 		case "custom_message": {
 			if (entry.customType === "collab-prompt") {
@@ -310,51 +603,64 @@ const EntryRow = memo(function EntryRow({ entry, results, active, continued, hos
 					typeof (details as Record<string, unknown>).from === "string"
 						? ((details as Record<string, unknown>).from as string)
 						: "guest";
+				const isSelf = Boolean(guestName && from === guestName);
 				return (
-					<Row kind="user" gutter={<span className="tr-badge">{from}</span>} time={clock} title={fullTime}>
+					<PromptRow sender={<span className="tr-badge">{from}</span>} isSelf={isSelf} time={clock} title={fullTime}>
 						<MsgContent content={entry.content} />
-					</Row>
+					</PromptRow>
 				);
 			}
 			if (!entry.display) return null;
 			return (
-				<Row kind="custom" gutter="" title={fullTime}>
-					<div className="tr-custom">
-						<span className="tr-chip">{entry.customType}</span>
-						<MsgContent content={entry.content} />
+				<div className="tr-row tr-row--custom">
+					<div className="tr-body">
+						<div className="tr-custom">
+							<span className="tr-chip">{entry.customType}</span>
+							<MsgContent content={entry.content} />
+						</div>
 					</div>
-				</Row>
+				</div>
 			);
 		}
 		case "compaction":
 			return (
-				<div className="tr-divider" title={entry.shortSummary ?? entry.summary}>
-					<span>Context compacted · {fmtTokens(entry.tokensBefore)} tokens</span>
-				</div>
+				<ExpandableSummaryDivider
+					label={`Context compacted · ${fmtTokens(entry.tokensBefore)} tokens`}
+					subtitle={entry.shortSummary}
+					summary={entry.summary}
+				/>
 			);
 		case "branch_summary":
-			return (
-				<div className="tr-divider" title={entry.summary}>
-					<span>Branch summary</span>
-				</div>
-			);
-		case "model_change":
-			return (
-				<Row kind="marker" gutter="" title={fullTime}>
-					<span className="tr-marker">Model changed to {entry.model}</span>
-				</Row>
-			);
-		case "thinking_level_change":
-			return (
-				<Row kind="marker" gutter="" title={fullTime}>
-					<span className="tr-marker">Thinking set to {entry.thinkingLevel ?? "off"}</span>
-				</Row>
-			);
+			return <ExpandableSummaryDivider label="Branch summary" summary={entry.summary} />;
 		default:
-			// unknown entry types from newer hosts — skip tolerantly
 			return null;
 	}
-}, entryRowEqual);
+});
+
+function isAssistantEntry(entry: SessionEntry): entry is AssistantEntry {
+	return entry.type === "message" && entry.message.role === "assistant";
+}
+
+function willEntryRender(entry: SessionEntry): boolean {
+	switch (entry.type) {
+		case "message":
+			return entry.message.role === "user" || entry.message.role === "assistant";
+		case "custom_message":
+			return entry.customType === "collab-prompt" || entry.display;
+		case "compaction":
+		case "branch_summary":
+		case "model_change":
+		case "thinking_level_change":
+			return true;
+		default:
+			return false;
+	}
+}
+
+type RenderItem =
+	| { kind: "assistantTurn"; key: string; entries: AssistantEntry[]; isLatestAssistant: boolean }
+	| { kind: "entry"; entry: SessionEntry }
+	| { kind: "markers"; key: string; parts: string[]; title?: string };
 
 /**
  * Rows mounted at the tail. Large sessions carry thousands of entries; mounting
@@ -366,35 +672,106 @@ const WINDOW = 100;
 const EARLIER_TRIGGER_PX = 200;
 
 export function Transcript(props: TranscriptProps): ReactNode {
-	const { entries, stream, streamDone, activeTools, working, compact, host, phase } = props;
+	const {
+		entries,
+		stream,
+		streamDone,
+		activeTools,
+		working,
+		compact,
+		viewMode = "standard",
+		viewSeq = 0,
+		guestName,
+		hostName,
+		host,
+		phase,
+	} = props;
 
-	// null follows the tail. A number pins the first mounted entry while the
-	// reader is scrolled away from the bottom, so appended entries never
-	// unmount rows above the reader and shift the page under them.
 	const [pinnedStart, setPinnedStart] = useState<number | null>(null);
 	const [atBottom, setAtBottom] = useState(true);
+
+	const modeSignal = useMemo<ToolOpenSignal | undefined>(() => {
+		if (viewSeq === 0 && viewMode === "standard") return undefined;
+		return { open: viewMode === "detailed", seq: viewSeq };
+	}, [viewMode, viewSeq]);
+
 	const tailStart = Math.max(0, entries.length - WINDOW);
 	const start = pinnedStart === null ? tailStart : Math.min(pinnedStart, tailStart);
 	const visible = useMemo(() => entries.slice(start), [entries, start]);
 
-	// Group consecutive assistant turns across paired toolResult/hidden entries.
-	const { continuedFlags, tailAfterVisible } = useMemo(() => {
-		const flags: boolean[] = new Array(visible.length).fill(false);
-		let prevAssistant = false;
-		for (let i = 0; i < visible.length; i++) {
+	// Coalesce consecutive assistant messages (across paired toolResults) into one cohesive turn
+	// and coalesce consecutive model/thinking markers.
+	const { renderItems, tailAfterAssistant } = useMemo(() => {
+		const items: RenderItem[] = [];
+		let lastAssistantTurnIdx = -1;
+		let i = 0;
+
+		while (i < visible.length) {
 			const entry = visible[i]!;
-			if (!willEntryRender(entry)) continue;
+			if (!willEntryRender(entry)) {
+				i++;
+				continue;
+			}
+			if (entry.type === "model_change" || entry.type === "thinking_level_change") {
+				const parts: string[] = [];
+				const firstId = entry.id;
+				const title = fmtFullTime(entry.timestamp);
+				while (i < visible.length) {
+					const cur = visible[i]!;
+					if (!willEntryRender(cur)) {
+						i++;
+						continue;
+					}
+					if (cur.type === "model_change") {
+						parts.push(`model: ${cur.model}`);
+						i++;
+					} else if (cur.type === "thinking_level_change") {
+						parts.push(`effort: ${cur.thinkingLevel ?? "off"}`);
+						i++;
+					} else {
+						break;
+					}
+				}
+				items.push({ kind: "markers", key: `mk-${firstId}`, parts, title });
+				continue;
+			}
 			if (isAssistantEntry(entry)) {
-				flags[i] = prevAssistant;
-				prevAssistant = true;
-			} else {
-				prevAssistant = false;
+				const group: AssistantEntry[] = [];
+				while (i < visible.length) {
+					const cur = visible[i]!;
+					if (!willEntryRender(cur)) {
+						i++;
+						continue;
+					}
+					if (!isAssistantEntry(cur)) break;
+					group.push(cur);
+					i++;
+					const stop = cur.message.stopReason;
+					if (stop === "error" || stop === "aborted") break;
+				}
+				lastAssistantTurnIdx = items.length;
+				items.push({
+					kind: "assistantTurn",
+					key: group[0]!.id,
+					entries: group,
+					isLatestAssistant: false,
+				});
+				continue;
+			}
+			items.push({ kind: "entry", entry });
+			i++;
+		}
+
+		if (stream === null && lastAssistantTurnIdx >= 0) {
+			const lastTurn = items[lastAssistantTurnIdx];
+			if (lastTurn && lastTurn.kind === "assistantTurn") {
+				items[lastAssistantTurnIdx] = { ...lastTurn, isLatestAssistant: true };
 			}
 		}
-		return { continuedFlags: flags, tailAfterVisible: prevAssistant };
-	}, [visible]);
+		const tailIsAssistant = items.length > 0 && items[items.length - 1]?.kind === "assistantTurn";
+		return { renderItems: items, tailAfterAssistant: tailIsAssistant };
+	}, [visible, stream]);
 
-	// A tool result always follows its call, so visible rows only pair with visible results.
 	const results = useMemo(() => {
 		const map = new Map<string, ToolResultMessage>();
 		for (const entry of visible) {
@@ -407,21 +784,13 @@ export function Transcript(props: TranscriptProps): ReactNode {
 
 	const rootRef = useRef<HTMLDivElement | null>(null);
 	const lockRef = useRef(true);
-	/**
-	 * First visible row and its offset from the viewport top, captured before
-	 * mounting earlier rows. Restoring against the row, not the total height
-	 * delta, stays exact when the same commit also appends live entries.
-	 */
 	const prependRef = useRef<{ anchor: Element; offset: number } | null>(null);
 
-	// Follow the tail while bottom-locked; releasing/re-arming happens in onScroll.
 	useEffect(() => {
 		const el = rootRef.current;
 		if (el !== null) followTranscriptTail(el, lockRef);
 	}, [entries, stream, activeTools, working]);
 
-	// A `live` transition (initial connect or reconnect) jumps to the latest message
-	// regardless of the prior scroll position. Absent for the agent drawer's compact transcript.
 	useEffect(() => {
 		const el = rootRef.current;
 		if (phase !== "live" || el === null) return;
@@ -430,7 +799,6 @@ export function Transcript(props: TranscriptProps): ReactNode {
 		followTranscriptTail(el, lockRef, true);
 	}, [phase]);
 
-	// Keep the reader's content in place when earlier rows mount above it.
 	useLayoutEffect(() => {
 		const el = rootRef.current;
 		const before = prependRef.current;
@@ -440,13 +808,13 @@ export function Transcript(props: TranscriptProps): ReactNode {
 		el.scrollTop += before.anchor.getBoundingClientRect().top - el.getBoundingClientRect().top - before.offset;
 	}, [start]);
 
-	// Attach one-click copy buttons to fenced code blocks in the browser without
-	// altering Markdown.tsx SSR HTML output.
+	// Attach one-click copy buttons to Markdown fenced code blocks without touching SSR HTML.
 	useEffect(() => {
 		const root = rootRef.current;
 		if (!root) return;
-		const pres = root.querySelectorAll("pre");
-		for (const pre of pres) {
+		const pres = root.querySelectorAll(".tr-md pre");
+		for (const el of pres) {
+			const pre = el as HTMLElement;
 			if (pre.dataset.copyBound === "1") continue;
 			pre.dataset.copyBound = "1";
 			const btn = document.createElement("button");
@@ -498,8 +866,6 @@ export function Transcript(props: TranscriptProps): ReactNode {
 		}
 	};
 
-	// Tool calls committed anywhere in the session: rescanned when entries change,
-	// not per streaming token or tool output update.
 	const committedToolIds = useMemo(() => {
 		const ids = new Set<string>();
 		for (const entry of entries) {
@@ -511,7 +877,6 @@ export function Transcript(props: TranscriptProps): ReactNode {
 		return ids;
 	}, [entries]);
 
-	// Active tools not already represented as toolCall blocks in committed rows or the stream ghost.
 	const tailTools = useMemo(() => {
 		const tail: ActiveTool[] = [];
 		for (const tool of activeTools.values()) {
@@ -522,9 +887,9 @@ export function Transcript(props: TranscriptProps): ReactNode {
 		return tail;
 	}, [committedToolIds, stream, activeTools]);
 
-	// While the snapshot downloads the banner reports progress; an empty transcript isn't "no activity".
 	const settled = phase === undefined || phase === "live";
 	const streamingNow = working || stream !== null;
+	const streamList = useMemo(() => (stream !== null ? [stream] : []), [stream]);
 
 	return (
 		<div className="tr-wrap">
@@ -536,7 +901,6 @@ export function Transcript(props: TranscriptProps): ReactNode {
 					if (el === null) return;
 					updateTranscriptTailLock(el, lockRef);
 					setAtBottom(lockRef.current);
-					// Back at the bottom: drop the pin so the window trims to the tail again.
 					if (lockRef.current) {
 						if (pinnedStart !== null) setPinnedStart(null);
 					} else if (pinnedStart === null) {
@@ -546,54 +910,87 @@ export function Transcript(props: TranscriptProps): ReactNode {
 				}}
 			>
 				{settled && entries.length === 0 && stream === null && !working && (
-					<div className="tr-empty">Session connected — waiting for the first message.</div>
+					<div className="tr-empty">Connected — send a prompt below or wait for host activity.</div>
 				)}
 				{start > 0 && (
 					<button type="button" className="tr-earlier" onClick={showEarlier}>
 						show {start.toLocaleString("en-US")} earlier
 					</button>
 				)}
-				{visible.map((entry, i) => (
-					<EntryRow
-						key={entry.id}
-						entry={entry}
-						results={results}
-						active={activeTools}
-						continued={continuedFlags[i] ?? false}
-						host={host}
-					/>
-				))}
-				{stream !== null && (
-					<Row kind="assistant" gutter="Agent" continued={tailAfterVisible}>
-						<AssistantBody
-							message={stream}
-							results={results}
-							active={activeTools}
-							pending={!streamDone}
-							host={host}
-						/>
-					</Row>
-				)}
-				{tailTools.length > 0 && (
-					<Row kind="assistant" gutter="Agent" continued={tailAfterVisible || stream !== null}>
-						{tailTools.map(tool => (
-							<ToolCard
-								key={tool.toolCallId}
-								toolCallId={tool.toolCallId}
-								name={tool.toolName}
-								intent={tool.intent}
-								args={tool.args}
-								running
-								partialResult={tool.partialResult}
+				{renderItems.map(item => {
+					if (item.kind === "markers") {
+						return (
+							<div key={item.key} className="tr-row tr-row--marker" title={item.title}>
+								<span className="tr-marker">{item.parts.join("  ·  ")}</span>
+							</div>
+						);
+					}
+					if (item.kind === "assistantTurn") {
+						return (
+							<AssistantTurnRow
+								key={item.key}
+								entries={item.entries}
+								results={results}
+								active={activeTools}
+								isLatestAssistant={item.isLatestAssistant}
+								viewMode={viewMode}
+								modeSignal={modeSignal}
 								host={host}
 							/>
-						))}
-					</Row>
+						);
+					}
+					return (
+						<SingleEntryRow
+							key={item.entry.id}
+							entry={item.entry}
+							guestName={guestName}
+							hostName={hostName}
+						/>
+					);
+				})}
+				{stream !== null && (
+					<div className={`tr-row tr-row--assistant${tailAfterAssistant ? " tr-row--continued" : ""}`}>
+						<div className="tr-body">
+							<AssistantBody
+								messages={streamList}
+								results={results}
+								active={activeTools}
+								pending={!streamDone}
+								viewMode={viewMode}
+								modeSignal={modeSignal}
+								isLatestAssistant={true}
+								host={host}
+							/>
+						</div>
+					</div>
+				)}
+				{tailTools.length > 0 && (
+					<div
+						className={`tr-row tr-row--assistant${tailAfterAssistant || stream !== null ? " tr-row--continued" : ""}`}
+					>
+						<div className="tr-body">
+							{tailTools.map(tool => (
+								<ToolCard
+									key={tool.toolCallId}
+									toolCallId={tool.toolCallId}
+									name={tool.toolName}
+									intent={tool.intent}
+									args={tool.args}
+									running
+									partialResult={tool.partialResult}
+									openSignal={modeSignal}
+									host={host}
+								/>
+							))}
+						</div>
+					</div>
 				)}
 				{working && stream === null && activeTools.size === 0 && (
-					<Row kind="assistant" gutter="Agent" continued={tailAfterVisible}>
-						<div className="tr-shimmer">thinking…</div>
-					</Row>
+					<div className={`tr-row tr-row--assistant${tailAfterAssistant ? " tr-row--continued" : ""}`}>
+						<div className="tr-body">
+							<div className="tr-shimmer">thinking…</div>
+						</div>
+					</div>
 				)}
 			</div>
 			{compact !== true && !atBottom && entries.length > 0 && (
