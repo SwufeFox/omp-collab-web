@@ -1,7 +1,7 @@
-import { CheckCircle2, ClipboardPaste, Lock, X } from "lucide-react";
-import type { FormEvent, ReactNode } from "react";
+import { AlertCircle, CheckCircle2, ClipboardPaste, Lock, X } from "lucide-react";
+import type { ClipboardEvent, FormEvent, ReactNode } from "react";
 import { useMemo, useState } from "react";
-import { parseCollabLink } from "../../lib/link";
+import { extractCollabLink, parseCollabLink } from "../../lib/link";
 import { OmpMark } from "./OmpMark";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -16,41 +16,57 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 	const [name, setName] = useState(defaultName);
 	const [localError, setLocalError] = useState<string | null>(null);
 
-	const parsedPreview = useMemo(() => {
-		const trimmed = link.trim();
-		if (!trimmed) return null;
-		const parsed = parseCollabLink(trimmed);
-		if ("error" in parsed) return null;
+	const linkStatus = useMemo(() => {
+		const cleaned = extractCollabLink(link);
+		if (!cleaned) return { kind: "empty" as const };
+		const parsed = parseCollabLink(cleaned);
+		if ("error" in parsed) {
+			return { kind: "invalid" as const, error: parsed.error };
+		}
 		try {
 			return {
+				kind: "valid" as const,
+				cleaned,
 				host: new URL(parsed.wsUrl).host,
 				mode: parsed.writeToken ? "Interactive" : "Read-only",
 			};
 		} catch {
-			return null;
+			return { kind: "invalid" as const, error: "Invalid relay URL" };
 		}
 	}, [link]);
 
 	const submit = (e: FormEvent<HTMLFormElement>): void => {
 		e.preventDefault();
-		const trimmed = link.trim();
-		if (!trimmed) {
+		const cleaned = extractCollabLink(link);
+		if (!cleaned) {
 			setLocalError("Paste a join link first.");
 			return;
 		}
 		setLocalError(null);
-		onConnect(trimmed, name.trim() || "guest");
+		onConnect(cleaned, name.trim() || "guest");
 	};
 
 	const pasteLink = async (): Promise<void> => {
 		try {
 			const text = await navigator.clipboard.readText();
-			if (text.trim()) {
-				setLink(text.trim());
+			const cleaned = extractCollabLink(text);
+			if (cleaned) {
+				setLink(cleaned);
 				setLocalError(null);
 			}
 		} catch {
 			// Clipboard read permission denied or unsupported — silent fallback
+		}
+	};
+
+	const onInputPaste = (e: ClipboardEvent<HTMLInputElement>): void => {
+		const raw = e.clipboardData?.getData("text/plain") ?? "";
+		if (!raw) return;
+		const cleaned = extractCollabLink(raw);
+		if (cleaned && cleaned !== raw.trim()) {
+			e.preventDefault();
+			setLink(cleaned);
+			setLocalError(null);
 		}
 	};
 
@@ -84,6 +100,7 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 							className="sh-input sh-input-mono sh-input-in-group"
 							type="text"
 							value={link}
+							onPaste={onInputPaste}
 							onChange={e => {
 								setLink(e.target.value);
 								if (localError) setLocalError(null);
@@ -118,12 +135,17 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 							<span>Paste</span>
 						</button>
 					</div>
-					{parsedPreview ? (
+					{linkStatus.kind === "valid" ? (
 						<span className="sh-field-hint sh-link-valid">
 							<CheckCircle2 size={13} aria-hidden />
 							<span>
-								Ready · {parsedPreview.host} · {parsedPreview.mode}
+								Ready · {linkStatus.host} · {linkStatus.mode}
 							</span>
+						</span>
+					) : linkStatus.kind === "invalid" && link.trim().length >= 8 ? (
+						<span className="sh-field-hint sh-link-invalid">
+							<AlertCircle size={13} aria-hidden />
+							<span>{linkStatus.error}</span>
 						</span>
 					) : (
 						<span className="sh-field-hint">

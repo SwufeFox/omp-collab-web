@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	DEFAULT_RELAY_URL,
 	encodeBase64Url,
+	extractCollabLink,
 	formatCollabLink,
 	generateRoomId,
 	packEnvelope,
@@ -137,6 +138,13 @@ describe("collab link parsing", () => {
 			expect(parsed.roomId).toBe(roomId);
 			expect(parsed.key).toEqual(KEY);
 		}
+	});
+	it("extracts embedded collab links from terminal output or wrapped punctuation", () => {
+		const rawLink = formatCollabLink(DEFAULT_RELAY_URL, ROOM, KEY);
+		expect(extractCollabLink(`  join link: ${rawLink}  `)).toBe(rawLink);
+		expect(extractCollabLink(`Join session at <https://my.omp.sh/#${rawLink}>.`)).toBe(
+			`https://my.omp.sh/#${rawLink}`,
+		);
 	});
 });
 

@@ -1,9 +1,9 @@
 import type { SessionHeader, SessionState } from "@oh-my-pi/pi-wire";
-import { Check, ChevronDown, Eye, Link2, LogOut, Monitor, Moon, MoreHorizontal, PanelRight, Sun } from "lucide-react";
+import { Check, ChevronDown, Copy, Eye, Link2, LogOut, Monitor, Moon, MoreHorizontal, PanelRight, Sun } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useEffect, useId, useRef, useState } from "react";
 import type { ConnectionPhase } from "../../lib/client";
-import { fmtPercent, shortenPath } from "../../lib/format";
+import { fmtPercent, fmtTokens, shortenPath } from "../../lib/format";
 import { type ThemePreference, useThemePreference } from "../../lib/theme";
 import type { TranscriptViewMode } from "../transcript/Transcript";
 import { OmpMark } from "./OmpMark";
@@ -18,9 +18,9 @@ const PHASE_LABEL: Record<ConnectionPhase, string> = {
 };
 
 const VIEW_MODES: readonly { id: TranscriptViewMode; label: string; hint: string }[] = [
-	{ id: "focus", label: "Focus", hint: "Collapse settled step groups" },
-	{ id: "standard", label: "Standard", hint: "Keep latest & errors open" },
-	{ id: "detailed", label: "Detailed", hint: "Expand all steps & outputs" },
+	{ id: "focus", label: "Focus", hint: "Collapse settled step groups (Alt+1)" },
+	{ id: "standard", label: "Standard", hint: "Keep latest & errors open (Alt+2)" },
+	{ id: "detailed", label: "Detailed", hint: "Expand all steps & outputs (Alt+3)" },
 ];
 
 const NEXT_THEME: Record<ThemePreference, ThemePreference> = {
@@ -69,6 +69,7 @@ export const HeaderBar = memo(function HeaderBar({
 }: HeaderBarProps): ReactNode {
 	const [openMenu, setOpenMenu] = useState<"details" | "more" | null>(null);
 	const [copied, setCopied] = useState(false);
+	const [copiedCwd, setCopiedCwd] = useState(false);
 	const detailsRef = useRef<HTMLDivElement | null>(null);
 	const moreRef = useRef<HTMLDivElement | null>(null);
 	const detailsId = useId();
@@ -116,6 +117,12 @@ export const HeaderBar = memo(function HeaderBar({
 		return () => window.clearTimeout(timer);
 	}, [copied]);
 
+	useEffect(() => {
+		if (!copiedCwd) return;
+		const timer = window.setTimeout(() => setCopiedCwd(false), 1800);
+		return () => window.clearTimeout(timer);
+	}, [copiedCwd]);
+
 	const copyInvite = async (): Promise<void> => {
 		try {
 			await navigator.clipboard.writeText(window.location.href);
@@ -125,7 +132,20 @@ export const HeaderBar = memo(function HeaderBar({
 		}
 	};
 
+	const copyCwd = async (cwd: string): Promise<void> => {
+		try {
+			await navigator.clipboard.writeText(cwd);
+			setCopiedCwd(true);
+		} catch {
+			// Clipboard write unavailable — non-fatal
+		}
+	};
+
 	const clampedPct = pct != null ? Math.min(100, Math.max(0, pct)) : null;
+	const ctxDetail =
+		usage?.tokens != null && usage?.contextWindow != null && usage.contextWindow > 0
+			? `${fmtTokens(usage.tokens)} / ${fmtTokens(usage.contextWindow)} · ${fmtPercent(clampedPct)}`
+			: fmtPercent(clampedPct);
 	const ThemeIcon = THEME_ICON[preference];
 
 	return (
@@ -170,6 +190,11 @@ export const HeaderBar = memo(function HeaderBar({
 					>
 						<span className={`sh-dot sh-dot-${phase}`} />
 						<span className="sh-status-text">{PHASE_LABEL[phase]}</span>
+						{readOnly && (
+							<span className="sh-status-ro" title="Read-only view link">
+								<Eye size={11} aria-hidden />
+							</span>
+						)}
 						{clampedPct != null && (
 							<span className={`sh-status-ctx${clampedPct > 80 ? " sh-status-ctx-warn" : ""}`}>
 								{fmtPercent(clampedPct)}
@@ -206,7 +231,7 @@ export const HeaderBar = memo(function HeaderBar({
 									<div className="sh-popover-row">
 										<span className="sh-popover-label">Context</span>
 										<span className={`sh-popover-mono${clampedPct > 80 ? " sh-popover-warn" : ""}`}>
-											{fmtPercent(clampedPct)}
+											{ctxDetail}
 										</span>
 									</div>
 									<div className="sh-gauge-track sh-gauge-track-wide">
@@ -219,7 +244,18 @@ export const HeaderBar = memo(function HeaderBar({
 							)}
 							{state?.cwd && (
 								<div className="sh-popover-block">
-									<span className="sh-popover-label">Workspace</span>
+									<div className="sh-popover-row">
+										<span className="sh-popover-label">Workspace</span>
+										<button
+											type="button"
+											className="sh-popover-copy-btn"
+											onClick={() => void copyCwd(state.cwd)}
+											title="Copy workspace path"
+										>
+											{copiedCwd ? <Check size={11} aria-hidden /> : <Copy size={11} aria-hidden />}
+											<span>{copiedCwd ? "Copied" : "Copy"}</span>
+										</button>
+									</div>
 									<span className="sh-popover-path" title={state.cwd}>
 										{state.cwd}
 									</span>
@@ -271,7 +307,7 @@ export const HeaderBar = memo(function HeaderBar({
 					type="button"
 					className={railOpen ? "sh-btn sh-btn-icon sh-btn-on" : "sh-btn sh-btn-icon"}
 					onClick={onToggleRail}
-					title={railOpen ? "Hide agents" : "Show agents"}
+					title={railOpen ? "Hide agents (Alt+A)" : "Show agents (Alt+A)"}
 					aria-label={railOpen ? "Hide agents panel" : "Show agents panel"}
 					aria-pressed={railOpen}
 				>

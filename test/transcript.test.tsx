@@ -301,4 +301,37 @@ describe("Transcript progressive disclosure & coalescing", () => {
 		expect(detailedHtml).toContain("FIRST_OUTPUT_BODY");
 		expect(detailedHtml).toContain("SECOND_OUTPUT_BODY");
 	});
+
+	it("auto-expands failed tool outputs in standard mode while keeping focus mode folded", () => {
+		const errorEntries: SessionEntry[] = [
+			multiStepEntries[0]!,
+			{
+				type: "message",
+				id: "r1-err",
+				parentId: "a1",
+				timestamp: "2026-07-15T00:00:01Z",
+				message: {
+					role: "toolResult",
+					toolCallId: "call-1",
+					toolName: "read",
+					content: [{ type: "text", text: "ENOENT_DIAGNOSTIC_BODY" }],
+					isError: true,
+					timestamp: 2,
+				},
+			},
+			multiStepEntries[2]!,
+			multiStepEntries[3]!,
+			multiStepEntries[4]!,
+		];
+
+		const standardHtml = renderTranscript({ entries: errorEntries, working: false, viewMode: "standard" });
+		expect(countElements(standardHtml, ".tv-body")).toBe(1);
+		expect(standardHtml).toContain("ENOENT_DIAGNOSTIC_BODY");
+		expect(standardHtml).not.toContain("SECOND_OUTPUT_BODY");
+
+		const focusHtml = renderTranscript({ entries: errorEntries, working: false, viewMode: "focus" });
+		expect(countElements(focusHtml, ".tr-steps-collapsed")).toBe(1);
+		expect(focusHtml).toContain("1 failed");
+		expect(focusHtml).not.toContain("ENOENT_DIAGNOSTIC_BODY");
+	});
 });

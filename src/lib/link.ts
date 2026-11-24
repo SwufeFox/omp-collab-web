@@ -166,3 +166,23 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 	const writeToken = secret.byteLength > ROOM_KEY_BYTES ? secret.subarray(ROOM_KEY_BYTES) : undefined;
 	return { wsUrl: `${normalized.origin}/r/${roomId}`, roomId, key, writeToken };
 }
+
+const TRIM_WRAP_RE = /^[<>`"'\s]+|[<>`"'\s,.;:!?)\]]+$/g;
+
+/**
+ * Extracts a valid collab link from raw user input or terminal output
+ * (e.g. `"join link: wss://my.omp.sh/r/roomId.key"`), falling back to trimmed input.
+ */
+export function extractCollabLink(raw: string): string {
+	const trimmed = raw.trim();
+	if (!trimmed) return "";
+	const unwrapped = trimmed.replace(TRIM_WRAP_RE, "");
+	if (unwrapped && !("error" in parseCollabLink(unwrapped))) return unwrapped;
+	for (const part of trimmed.split(/\s+/)) {
+		const candidate = part.replace(TRIM_WRAP_RE, "");
+		if (candidate.length >= 16 && !("error" in parseCollabLink(candidate))) {
+			return candidate;
+		}
+	}
+	return unwrapped || trimmed;
+}

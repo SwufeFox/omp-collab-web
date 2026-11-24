@@ -61,9 +61,15 @@ const peers = new Map<number, string>();
 const transcriptBytes = new TextEncoder().encode(subagentTranscriptJsonl);
 const transcriptDecoder = new TextDecoder();
 
+interface QueuedGuestPrompt {
+	text: string;
+	images?: Extract<WireFrame, { t: "prompt" }>["images"];
+	fromPeer: number;
+}
+
 let lastEntryId: string | null = entries[entries.length - 1]?.id ?? null;
 let streaming = false;
-let queuedPrompts = 0;
+const pendingFollowUps: QueuedGuestPrompt[] = [];
 let turnSeq = 0;
 let liveEntrySeq = 0;
 let replayQueue: ScriptedStep[] = [];
@@ -98,7 +104,7 @@ function buildState(): SessionState {
 	const tokens = 51_000 + entries.length * 120;
 	return {
 		isStreaming: streaming,
-		queuedMessageCount: queuedPrompts,
+		queuedMessageCount: pendingFollowUps.length,
 		sessionName: fixtureHeader.title,
 		cwd: fixtureHeader.cwd,
 		model: fixtureModel,
@@ -146,8 +152,10 @@ function scheduleStep(): void {
 			scheduleStep();
 			return;
 		}
-		if (queuedPrompts > 0) {
-			queuedPrompts--;
+		const nextQueued = pendingFollowUps.shift();
+		if (nextQueued) {
+			emitPromptEntry(nextQueued.text, nextQueued.images, nextQueued.fromPeer);
+			broadcastState();
 			startReplay();
 		}
 	}, STEP_INTERVAL_MS);
@@ -208,30 +216,66 @@ function handleHello(name: string, proto: number, fromPeer: number): void {
 	broadcastState();
 }
 
-function handlePrompt(text: string, fromPeer: number): void {
+function emitPromptEntry(
+	text: string,
+	images: Extract<WireFrame, { t: "prompt" }>["images"],
+	fromPeer: number,
+): void {
 	liveEntrySeq++;
+	const content =
+		images && images.length > 0
+			? [...(text ? [{ type: "text" as const, text }] : []), ...images]
+			: text;
 	appendEntry({
 		id: `live-${liveEntrySeq}`,
 		parentId: lastEntryId,
 		timestamp: new Date().toISOString(),
 		type: "custom_message",
 		customType: "collab-prompt",
-		content: text,
+		content,
 		details: { from: peerName(fromPeer) },
 		display: true,
 	});
-	if (replayTimer !== null || replayQueue.length > 0) {
-		queuedPrompts++;
+}
+
+function handlePrompt(
+	text: string,
+	images: Extract<WireFrame, { t: "prompt" }>["images"],
+	followUp: boolean | undefined,
+	fromPeer: number,
+): void {
+	const active = replayTimer !== null || replayQueue.length > 0;
+	if (active && followUp) {
+		pendingFollowUps.push({ text, images, fromPeer });
 		broadcastState();
 		return;
 	}
+	emitPromptEntry(text, images, fromPeer);
+	if (active) {
+		// Steer: injected immediately into the running turn.
+		return;
+	}
+	startReplay();
+}
+
+function handleDeliverQueue(): void {
+	if (pendingFollowUps.length === 0) return;
+	const wasReplaying = replayTimer !== null || replayQueue.length > 0;
+	cancelReplay();
+	if (wasReplaying) sendFrame({ t: "event", event: { type: "agent_end" } });
+	streaming = false;
+	while (pendingFollowUps.length > 0) {
+		const item = pendingFollowUps.shift()!;
+		emitPromptEntry(item.text, item.images, item.fromPeer);
+	}
+	broadcastState();
 	startReplay();
 }
 
 function handleAbort(fromPeer: number): void {
 	const wasReplaying = replayTimer !== null || replayQueue.length > 0;
 	cancelReplay();
-	queuedPrompts = 0;
+	pendingFollowUps.length = 0;
 	notice("info", `${peerName(fromPeer)} interrupted`);
 	if (wasReplaying) sendFrame({ t: "event", event: { type: "agent_end" } });
 	streaming = false;
@@ -256,7 +300,10 @@ function handleFrame(frame: WireFrame, fromPeer: number): void {
 			handleHello(frame.name, frame.proto, fromPeer);
 			break;
 		case "prompt":
-			handlePrompt(frame.text, fromPeer);
+			handlePrompt(frame.text, frame.images, frame.followUp, fromPeer);
+			break;
+		case "deliver-queue":
+			handleDeliverQueue();
 			break;
 		case "abort":
 			handleAbort(fromPeer);

@@ -11,6 +11,7 @@ import type { ReactNode } from "react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActiveTool, ConnectionPhase } from "../../lib/client";
 import { fmtClock, fmtTokens } from "../../lib/format";
+import type { PendingPrompt } from "../../lib/prompt-queue";
 import type { ToolRenderHost } from "../../tool-render";
 import type { ToolOpenSignal } from "../../tool-render/ToolView";
 import { Markdown, StreamingMarkdown } from "./Markdown";
@@ -38,6 +39,14 @@ export interface TranscriptProps {
 	host?: ToolRenderHost;
 	/** Main connection phase; absent for the agent inspector's compact transcript. */
 	phase?: ConnectionPhase;
+	/** Custom placeholder shown when the transcript is live and empty. */
+	emptyText?: string;
+	/** Optimistic prompts sent by this guest awaiting host entry echo. */
+	sendingPrompts?: readonly PendingPrompt[];
+	/** Monotonic counter bumped when this guest dispatches a prompt, forcing tail-follow. */
+	sendSeq?: number;
+	/** Opens full-size lightbox for message image attachments. */
+	onPreviewImage?(src: string): void;
 }
 
 interface ScrollGeometry {
@@ -145,7 +154,13 @@ function ThinkingBlock({
 }
 
 /** Markdown + image thumbnails for user / custom message content. */
-function MsgContent({ content }: { content: string | readonly (TextContent | ImageContent)[] }): ReactNode {
+function MsgContent({
+	content,
+	onPreviewImage,
+}: {
+	content: string | readonly (TextContent | ImageContent)[];
+	onPreviewImage?(src: string): void;
+}): ReactNode {
 	if (typeof content === "string") return <Markdown text={content} />;
 	return (
 		<>
@@ -153,15 +168,23 @@ function MsgContent({ content }: { content: string | readonly (TextContent | Ima
 				switch (block.type) {
 					case "text":
 						return <Markdown key={i} text={block.text} />;
-					case "image":
+					case "image": {
+						const src = `data:${block.mimeType};base64,${block.data}`;
+						if (!onPreviewImage) {
+							return <img key={i} className="tr-msg-img" src={src} alt="attachment" />;
+						}
 						return (
-							<img
+							<button
 								key={i}
-								className="tr-msg-img"
-								src={`data:${block.mimeType};base64,${block.data}`}
-								alt="attachment"
-							/>
+								type="button"
+								className="tr-msg-img-btn"
+								onClick={() => onPreviewImage(src)}
+								aria-label="Preview attached image"
+							>
+								<img className="tr-msg-img" src={src} alt="attachment" />
+							</button>
 						);
+					}
 					default:
 						return null;
 				}
@@ -202,13 +225,15 @@ function summarizeExecItems(items: readonly ExecItem[]): string {
 function renderExecItem(
 	item: ExecItem,
 	host: ToolRenderHost | undefined,
+	viewMode: TranscriptViewMode,
 	openSignal: ToolOpenSignal | undefined,
 ): ReactNode {
 	if (item.kind === "thinking") {
 		return <ThinkingBlock key={item.key} text={item.text} redacted={item.redacted} openSignal={openSignal} />;
 	}
-	const { block, act, result, running } = item;
+	const { block, act, result, running, isError } = item;
 	const args = act?.args ?? block.arguments;
+	const defaultOpen = viewMode === "detailed" || (viewMode === "standard" && isError);
 	return (
 		<ToolCard
 			key={item.key}
@@ -219,7 +244,9 @@ function renderExecItem(
 			result={result}
 			host={host}
 			running={running}
+			startedAt={act?.startedAt}
 			partialResult={act?.partialResult}
+			defaultOpen={defaultOpen}
 			openSignal={openSignal}
 		/>
 	);
@@ -269,7 +296,7 @@ function ExecutionGroup({
 
 	// Single item: render directly as a 1-line collapsible row (no redundant "1 step" indirection).
 	if (items.length === 1) {
-		return <>{renderExecItem(items[0]!, host, effectiveSignal)}</>;
+		return <>{renderExecItem(items[0]!, host, viewMode, effectiveSignal)}</>;
 	}
 
 	const stepWord = `${items.length} steps`;
@@ -309,6 +336,7 @@ function ExecutionGroup({
 				>
 					<ChevronRight size={12} className="tr-chev tr-chev--open" aria-hidden />
 					<span className="tr-steps-count">{stepWord}</span>
+					<span className="tr-steps-summary">{summary}</span>
 					{errorCount > 0 && <span className="tr-steps-err-badge">{errorCount} failed</span>}
 				</button>
 				<button type="button" className="tr-steps-detail-btn" onClick={toggleOutputs}>
@@ -316,7 +344,7 @@ function ExecutionGroup({
 				</button>
 			</div>
 			<div className="tr-steps-rail">
-				{items.map(item => renderExecItem(item, host, effectiveSignal))}
+				{items.map(item => renderExecItem(item, host, viewMode, effectiveSignal))}
 			</div>
 		</div>
 	);
@@ -490,21 +518,36 @@ interface PromptRowProps {
 	sender: ReactNode;
 	isSelf?: boolean;
 	isHost?: boolean;
+	isPending?: boolean;
 	time?: string;
+	statusLabel?: string;
 	title?: string;
 	children: ReactNode;
 }
 
-function PromptRow({ sender, isSelf, isHost, time, title, children }: PromptRowProps): ReactNode {
+function PromptRow({
+	sender,
+	isSelf,
+	isHost,
+	isPending,
+	time,
+	statusLabel,
+	title,
+	children,
+}: PromptRowProps): ReactNode {
 	return (
 		<div
-			className={`tr-row tr-row--user${isSelf ? " tr-row--self" : ""}${isHost ? " tr-row--host" : ""}`}
+			className={`tr-row tr-row--user${isSelf ? " tr-row--self" : ""}${isHost ? " tr-row--host" : ""}${isPending ? " tr-row--pending" : ""}`}
 		>
 			<div className="tr-row-head">
 				<div className="tr-row-sender" title={title}>
 					<span className="tr-gutter">{sender}</span>
 					{isSelf && <span className="tr-you-tag">you</span>}
-					{time && <span className="tr-time">{time}</span>}
+					{statusLabel ? (
+						<span className="tr-pending-tag">{statusLabel}</span>
+					) : (
+						time && <span className="tr-time">{time}</span>
+					)}
 				</div>
 			</div>
 			<div className="tr-body">{children}</div>
@@ -579,9 +622,15 @@ interface SingleEntryProps {
 	entry: SessionEntry;
 	guestName?: string;
 	hostName?: string;
+	onPreviewImage?(src: string): void;
 }
 
-const SingleEntryRow = memo(function SingleEntryRow({ entry, guestName, hostName }: SingleEntryProps): ReactNode {
+const SingleEntryRow = memo(function SingleEntryRow({
+	entry,
+	guestName,
+	hostName,
+	onPreviewImage,
+}: SingleEntryProps): ReactNode {
 	const clock = fmtClock(entry.timestamp);
 	const fullTime = fmtFullTime(entry.timestamp);
 
@@ -590,7 +639,7 @@ const SingleEntryRow = memo(function SingleEntryRow({ entry, guestName, hostName
 			if (entry.message.role !== "user") return null;
 			return (
 				<PromptRow sender={hostName || "Host"} isHost time={clock} title={fullTime}>
-					<MsgContent content={entry.message.content} />
+					<MsgContent content={entry.message.content} onPreviewImage={onPreviewImage} />
 				</PromptRow>
 			);
 		}
@@ -606,7 +655,7 @@ const SingleEntryRow = memo(function SingleEntryRow({ entry, guestName, hostName
 				const isSelf = Boolean(guestName && from === guestName);
 				return (
 					<PromptRow sender={<span className="tr-badge">{from}</span>} isSelf={isSelf} time={clock} title={fullTime}>
-						<MsgContent content={entry.content} />
+						<MsgContent content={entry.content} onPreviewImage={onPreviewImage} />
 					</PromptRow>
 				);
 			}
@@ -616,7 +665,7 @@ const SingleEntryRow = memo(function SingleEntryRow({ entry, guestName, hostName
 					<div className="tr-body">
 						<div className="tr-custom">
 							<span className="tr-chip">{entry.customType}</span>
-							<MsgContent content={entry.content} />
+							<MsgContent content={entry.content} onPreviewImage={onPreviewImage} />
 						</div>
 					</div>
 				</div>
@@ -685,10 +734,20 @@ export function Transcript(props: TranscriptProps): ReactNode {
 		hostName,
 		host,
 		phase,
+		emptyText,
+		sendingPrompts,
+		sendSeq = 0,
+		onPreviewImage,
 	} = props;
 
 	const [pinnedStart, setPinnedStart] = useState<number | null>(null);
 	const [atBottom, setAtBottom] = useState(true);
+	const [seenCount, setSeenCount] = useState(entries.length);
+	const optimisticSending = sendingPrompts ?? [];
+
+	useEffect(() => {
+		if (atBottom) setSeenCount(entries.length);
+	}, [atBottom, entries.length]);
 
 	const modeSignal = useMemo<ToolOpenSignal | undefined>(() => {
 		if (viewSeq === 0 && viewMode === "standard") return undefined;
@@ -784,12 +843,51 @@ export function Transcript(props: TranscriptProps): ReactNode {
 
 	const rootRef = useRef<HTMLDivElement | null>(null);
 	const lockRef = useRef(true);
+	const lastScrollTopRef = useRef(0);
+	const programmaticScrollUntilRef = useRef(0);
 	const prependRef = useRef<{ anchor: Element; offset: number } | null>(null);
+	const lastSendSeqRef = useRef(sendSeq);
 
 	useEffect(() => {
 		const el = rootRef.current;
-		if (el !== null) followTranscriptTail(el, lockRef);
-	}, [entries, stream, activeTools, working]);
+		if (el !== null) {
+			followTranscriptTail(el, lockRef);
+			lastScrollTopRef.current = el.scrollTop;
+		}
+	}, [entries, stream, activeTools, working, optimisticSending.length]);
+
+	// Keep tail pinned when the scroll container height shrinks (multiline composer, queue shelf, mobile keyboard).
+	useEffect(() => {
+		const el = rootRef.current;
+		if (!el || typeof ResizeObserver === "undefined") return;
+		let prevHeight = el.clientHeight;
+		const ro = new ResizeObserver(() => {
+			const nextHeight = el.clientHeight;
+			if (nextHeight !== prevHeight) {
+				prevHeight = nextHeight;
+				if (lockRef.current) {
+					el.scrollTop = el.scrollHeight;
+					lastScrollTopRef.current = el.scrollTop;
+				}
+			}
+		});
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+
+	// Re-engage tail lock and snap cleanly to bottom immediately when the user sends a prompt.
+	useLayoutEffect(() => {
+		if (sendSeq === lastSendSeqRef.current) return;
+		lastSendSeqRef.current = sendSeq;
+		const el = rootRef.current;
+		setPinnedStart(null);
+		setAtBottom(true);
+		lockRef.current = true;
+		if (el !== null) {
+			el.scrollTop = el.scrollHeight;
+			lastScrollTopRef.current = el.scrollTop;
+		}
+	}, [sendSeq]);
 
 	useEffect(() => {
 		const el = rootRef.current;
@@ -797,6 +895,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 		setPinnedStart(null);
 		setAtBottom(true);
 		followTranscriptTail(el, lockRef, true);
+		lastScrollTopRef.current = el.scrollTop;
 	}, [phase]);
 
 	useLayoutEffect(() => {
@@ -808,15 +907,24 @@ export function Transcript(props: TranscriptProps): ReactNode {
 		el.scrollTop += before.anchor.getBoundingClientRect().top - el.getBoundingClientRect().top - before.offset;
 	}, [start]);
 
-	// Attach one-click copy buttons to Markdown fenced code blocks without touching SSR HTML.
+	// Attach a compact header bar (language + one-click Copy) inside fenced code blocks without touching SSR HTML.
 	useEffect(() => {
 		const root = rootRef.current;
 		if (!root) return;
+		let mutated = false;
 		const pres = root.querySelectorAll(".tr-md pre");
 		for (const el of pres) {
 			const pre = el as HTMLElement;
 			if (pre.dataset.copyBound === "1") continue;
 			pre.dataset.copyBound = "1";
+			pre.classList.add("tr-pre-enhanced");
+			const codeEl = pre.querySelector("code");
+			const langMatch = codeEl?.className.match(/language-([\w+-]+)/);
+			const bar = document.createElement("div");
+			bar.className = "tr-code-bar";
+			const langSpan = document.createElement("span");
+			langSpan.className = "tr-code-lang";
+			langSpan.textContent = langMatch?.[1] ?? "code";
 			const btn = document.createElement("button");
 			btn.type = "button";
 			btn.className = "tr-code-copy";
@@ -824,7 +932,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 			btn.textContent = "Copy";
 			let resetTimer: number | undefined;
 			btn.addEventListener("click", () => {
-				const codeText = pre.querySelector("code")?.textContent ?? pre.textContent ?? "";
+				const codeText = pre.querySelector("code")?.textContent ?? "";
 				void navigator.clipboard
 					?.writeText(codeText)
 					.then(() => {
@@ -838,7 +946,13 @@ export function Transcript(props: TranscriptProps): ReactNode {
 					})
 					.catch(() => {});
 			});
-			pre.appendChild(btn);
+			bar.append(langSpan, btn);
+			pre.insertBefore(bar, pre.firstChild);
+			mutated = true;
+		}
+		if (mutated && lockRef.current) {
+			root.scrollTop = root.scrollHeight;
+			lastScrollTopRef.current = root.scrollTop;
 		}
 	}, [visible, stream]);
 
@@ -861,6 +975,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 		setPinnedStart(null);
 		setAtBottom(true);
 		lockRef.current = true;
+		programmaticScrollUntilRef.current = Date.now() + 450;
 		if (el !== null) {
 			el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
 		}
@@ -889,6 +1004,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 
 	const settled = phase === undefined || phase === "live";
 	const streamingNow = working || stream !== null;
+	const unreadCount = !atBottom ? Math.max(0, entries.length - seenCount) : 0;
 	const streamList = useMemo(() => (stream !== null ? [stream] : []), [stream]);
 
 	return (
@@ -899,9 +1015,23 @@ export function Transcript(props: TranscriptProps): ReactNode {
 				onScroll={() => {
 					const el = rootRef.current;
 					if (el === null) return;
+					const curTop = el.scrollTop;
+					const prevTop = lastScrollTopRef.current;
+					lastScrollTopRef.current = curTop;
+					if (Date.now() < programmaticScrollUntilRef.current) {
+						if (el.scrollHeight - curTop - el.clientHeight <= 40) {
+							programmaticScrollUntilRef.current = 0;
+						}
+						return;
+					}
+					// Only unlock tail-follow if the user actually scrolled upward; layout shifts alone keep the lock.
+					if (lockRef.current && curTop >= prevTop - 2) {
+						return;
+					}
 					updateTranscriptTailLock(el, lockRef);
 					setAtBottom(lockRef.current);
 					if (lockRef.current) {
+						setSeenCount(entries.length);
 						if (pinnedStart !== null) setPinnedStart(null);
 					} else if (pinnedStart === null) {
 						setPinnedStart(start);
@@ -909,8 +1039,10 @@ export function Transcript(props: TranscriptProps): ReactNode {
 					if (el.scrollTop <= EARLIER_TRIGGER_PX) showEarlier();
 				}}
 			>
-				{settled && entries.length === 0 && stream === null && !working && (
-					<div className="tr-empty">Connected — send a prompt below or wait for host activity.</div>
+				{settled && entries.length === 0 && optimisticSending.length === 0 && stream === null && !working && (
+					<div className="tr-empty">
+						{emptyText ?? "Connected — send a prompt below or wait for host activity."}
+					</div>
 				)}
 				{start > 0 && (
 					<button type="button" className="tr-earlier" onClick={showEarlier}>
@@ -945,6 +1077,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 							entry={item.entry}
 							guestName={guestName}
 							hostName={hostName}
+							onPreviewImage={onPreviewImage}
 						/>
 					);
 				})}
@@ -977,6 +1110,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 									intent={tool.intent}
 									args={tool.args}
 									running
+									startedAt={tool.startedAt}
 									partialResult={tool.partialResult}
 									openSignal={modeSignal}
 									host={host}
@@ -985,8 +1119,30 @@ export function Transcript(props: TranscriptProps): ReactNode {
 						</div>
 					</div>
 				)}
-				{working && stream === null && activeTools.size === 0 && (
-					<div className={`tr-row tr-row--assistant${tailAfterAssistant ? " tr-row--continued" : ""}`}>
+				{optimisticSending.map(pending => {
+					const content =
+						pending.images.length > 0
+							? [
+									...(pending.text ? [{ type: "text" as const, text: pending.text }] : []),
+									...pending.images,
+								]
+							: pending.text;
+					return (
+						<PromptRow
+							key={pending.id}
+							sender={<span className="tr-badge">{guestName || "guest"}</span>}
+							isSelf
+							isPending
+							statusLabel="sending…"
+						>
+							<MsgContent content={content} onPreviewImage={onPreviewImage} />
+						</PromptRow>
+					);
+				})}
+				{(working || optimisticSending.length > 0) && stream === null && activeTools.size === 0 && (
+					<div
+						className={`tr-row tr-row--assistant${tailAfterAssistant && optimisticSending.length === 0 ? " tr-row--continued" : ""}`}
+					>
 						<div className="tr-body">
 							<div className="tr-shimmer">thinking…</div>
 						</div>
@@ -997,7 +1153,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 				<button type="button" className="tr-jump" onClick={jumpToLatest} aria-label="Jump to latest messages">
 					{streamingNow && <span className="tr-jump-dot" aria-hidden />}
 					<ArrowDown size={13} aria-hidden />
-					<span>Latest</span>
+					<span>{unreadCount > 0 ? `Latest · ${unreadCount} new` : "Latest"}</span>
 				</button>
 			)}
 		</div>

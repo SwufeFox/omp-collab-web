@@ -1,3 +1,4 @@
+import type { ImageContent } from "@oh-my-pi/pi-wire";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentDrawer } from "./components/agents/AgentDrawer";
@@ -6,9 +7,17 @@ import { Banners } from "./components/shell/Banners";
 import { Composer } from "./components/shell/Composer";
 import { ConnectScreen } from "./components/shell/ConnectScreen";
 import { HeaderBar } from "./components/shell/HeaderBar";
+import { ImageLightbox } from "./components/shell/ImageLightbox";
 import { Toasts } from "./components/shell/Toasts";
 import { Transcript, type TranscriptViewMode } from "./components/transcript/Transcript";
 import { GuestClient } from "./lib/client";
+import { extractCollabLink } from "./lib/link";
+import {
+	dropQueuedPrompts,
+	type PendingPrompt,
+	promoteQueuedToSending,
+	reconcilePendingPrompts,
+} from "./lib/prompt-queue";
 import { useGuestSnapshot } from "./lib/use-guest";
 import type { ToolRenderHost } from "./tool-render";
 import "./components/shell/shell.css";
@@ -44,7 +53,7 @@ function hashLink(): string | null {
 	const href = window.location.href;
 	const i = href.indexOf("#");
 	if (i < 0 || i + 1 >= href.length) return null;
-	return href.slice(i + 1);
+	return extractCollabLink(href.slice(i + 1)) || null;
 }
 
 export function App(): ReactNode {
@@ -53,9 +62,10 @@ export function App(): ReactNode {
 	const credsRef = useRef<Creds | null>(null);
 
 	const connect = useCallback((link: string, name: string): void => {
+		const cleaned = extractCollabLink(link);
 		let next: GuestClient;
 		try {
-			next = new GuestClient(link, name);
+			next = new GuestClient(cleaned, name);
 		} catch (err) {
 			setConnectError(err instanceof Error ? err.message : String(err));
 			return;
@@ -66,8 +76,10 @@ export function App(): ReactNode {
 		} catch {
 			// storage unavailable (private mode) — non-fatal
 		}
-		credsRef.current = { link, name };
-		window.location.hash = link;
+		credsRef.current = { link: cleaned, name };
+		if (hashLink() !== cleaned) {
+			window.location.hash = cleaned;
+		}
 		setConnectError(null);
 		setClient(prev => {
 			prev?.close();
@@ -76,6 +88,7 @@ export function App(): ReactNode {
 	}, []);
 
 	const leave = useCallback((): void => {
+		credsRef.current = null;
 		setClient(prev => {
 			prev?.close();
 			return null;
@@ -108,10 +121,17 @@ export function App(): ReactNode {
 		};
 	}, []);
 
-	// Deep link: a page load with a hash auto-connects.
+	// Deep link: auto-connect on initial hash and on URL hash changes.
 	useEffect(() => {
-		const link = hashLink();
-		if (link) connect(link, storedName());
+		const syncHash = (): void => {
+			const link = hashLink();
+			if (link && link !== credsRef.current?.link) {
+				connect(link, storedName());
+			}
+		};
+		syncHash();
+		window.addEventListener("hashchange", syncHash);
+		return () => window.removeEventListener("hashchange", syncHash);
 	}, [connect]);
 
 	useEffect(() => {
@@ -121,25 +141,108 @@ export function App(): ReactNode {
 	if (!client) {
 		return <ConnectScreen defaultName={storedName()} error={connectError} onConnect={connect} />;
 	}
-	return <Session client={client} guestName={credsRef.current?.name ?? storedName()} onLeave={leave} onRejoin={rejoin} />;
+	return (
+		<Session
+			client={client}
+			guestName={credsRef.current?.name ?? storedName()}
+			draftKey={`omp.collab.draft:${credsRef.current?.link.slice(0, 24) ?? "default"}`}
+			onLeave={leave}
+			onRejoin={rejoin}
+		/>
+	);
 }
 
 interface SessionProps {
 	client: GuestClient;
 	guestName: string;
+	draftKey: string;
 	onLeave(): void;
 	onRejoin(): void;
 }
 
-function Session({ client, guestName, onLeave, onRejoin }: SessionProps): ReactNode {
+function Session({ client, guestName, draftKey, onLeave, onRejoin }: SessionProps): ReactNode {
 	const snap = useGuestSnapshot(client);
 	const [railOpen, setRailOpen] = useState(false);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+	const [rawPendingPrompts, setRawPendingPrompts] = useState<readonly PendingPrompt[]>([]);
+	const [sendSeq, setSendSeq] = useState(0);
 	const [viewState, setViewState] = useState<{ mode: TranscriptViewMode; seq: number }>(() => ({
 		mode: storedViewMode(),
 		seq: 0,
 	}));
 	const autoOpenedRef = useRef(false);
+	const pendingIdSeqRef = useRef(0);
+	const entriesLenRef = useRef(snap.entries.length);
+	entriesLenRef.current = snap.entries.length;
+
+	// Reconcile synchronously during render so confirmed entries never flash twice even for a single frame.
+	const pendingPrompts = useMemo(
+		() => reconcilePendingPrompts(rawPendingPrompts, snap.entries, guestName),
+		[rawPendingPrompts, snap.entries, guestName],
+	);
+
+	useEffect(() => {
+		if (pendingPrompts !== rawPendingPrompts) {
+			setRawPendingPrompts(pendingPrompts);
+		}
+	}, [pendingPrompts, rawPendingPrompts]);
+
+	// Clear pending ghosts if the session terminates.
+	useEffect(() => {
+		if (snap.phase === "ended" && rawPendingPrompts.length > 0) {
+			setRawPendingPrompts([]);
+		}
+	}, [snap.phase, rawPendingPrompts.length]);
+
+	// When the host finishes a turn and drains its queue (`!working && queuedMessageCount === 0`),
+	// promote any remaining local queued items to `sending` so they transition smoothly.
+	const hostQueuedCount = snap.state?.queuedMessageCount ?? 0;
+	useEffect(() => {
+		if (!snap.working && hostQueuedCount === 0 && rawPendingPrompts.some(p => p.mode === "queued")) {
+			setRawPendingPrompts(prev => promoteQueuedToSending(prev));
+		}
+	}, [snap.working, hostQueuedCount, rawPendingPrompts]);
+
+	const sendingPrompts = useMemo(
+		() => pendingPrompts.filter(p => p.mode === "sending"),
+		[pendingPrompts],
+	);
+	const queuedPrompts = useMemo(
+		() => pendingPrompts.filter(p => p.mode === "queued"),
+		[pendingPrompts],
+	);
+
+	const dispatchPrompt = useCallback(
+		({ text, images, followUp }: { text: string; images: readonly ImageContent[]; followUp: boolean }) => {
+			const id = `opt-${++pendingIdSeqRef.current}`;
+			const nextItem: PendingPrompt = {
+				id,
+				text,
+				images,
+				mode: followUp ? "queued" : "sending",
+				createdAt: Date.now(),
+				baseEntryCount: entriesLenRef.current,
+			};
+			setRawPendingPrompts(prev => [...prev, nextItem]);
+			if (!followUp) {
+				setSendSeq(s => s + 1);
+			}
+			client.sendPrompt(text, images.length > 0 ? images : undefined, followUp ? { followUp: true } : undefined);
+		},
+		[client],
+	);
+
+	const deliverQueue = useCallback(() => {
+		setRawPendingPrompts(prev => promoteQueuedToSending(prev));
+		setSendSeq(s => s + 1);
+		client.sendDeliverQueue();
+	}, [client]);
+
+	const abortRun = useCallback(() => {
+		setRawPendingPrompts(prev => dropQueuedPrompts(prev));
+		client.sendAbort();
+	}, [client]);
 
 	const subCount = useMemo(() => snap.agents.filter(a => a.kind === "sub").length, [snap.agents]);
 	const hostName = useMemo(
@@ -178,6 +281,8 @@ function Session({ client, guestName, onLeave, onRejoin }: SessionProps): ReactN
 	const toggleRail = useCallback(() => setRailOpen(open => !open), []);
 	const closeRail = useCallback(() => setRailOpen(false), []);
 	const closeDrawer = useCallback(() => setSelectedId(null), []);
+	const openPreview = useCallback((src: string) => setPreviewSrc(src), []);
+	const closePreview = useCallback(() => setPreviewSrc(null), []);
 	const changeViewMode = useCallback((mode: TranscriptViewMode) => {
 		setViewState(prev => ({ mode, seq: prev.seq + 1 }));
 		try {
@@ -186,6 +291,46 @@ function Session({ client, guestName, onLeave, onRejoin }: SessionProps): ReactN
 			// storage unavailable
 		}
 	}, []);
+
+	// Global session shortcuts: Alt+1/2/3 view modes, Alt+A or Ctrl/Cmd+\ agents panel, Esc mobile rail.
+	useEffect(() => {
+		const onKeyDown = (e: KeyboardEvent): void => {
+			if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+				if (e.key === "1") {
+					e.preventDefault();
+					changeViewMode("focus");
+					return;
+				}
+				if (e.key === "2") {
+					e.preventDefault();
+					changeViewMode("standard");
+					return;
+				}
+				if (e.key === "3") {
+					e.preventDefault();
+					changeViewMode("detailed");
+					return;
+				}
+				if (e.key === "a" || e.key === "A") {
+					e.preventDefault();
+					setRailOpen(open => !open);
+					return;
+				}
+			}
+			if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === "\\") {
+				e.preventDefault();
+				setRailOpen(open => !open);
+				return;
+			}
+			if (e.key === "Escape" && railOpen && !drawerAgent && !previewSrc && window.innerWidth <= 960) {
+				const active = document.activeElement as HTMLElement | null;
+				if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
+				setRailOpen(false);
+			}
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [changeViewMode, drawerAgent, previewSrc, railOpen]);
 
 	return (
 		<div className="sh-app">
@@ -216,6 +361,9 @@ function Session({ client, guestName, onLeave, onRejoin }: SessionProps): ReactN
 							hostName={hostName}
 							host={toolHost}
 							phase={snap.phase}
+							sendingPrompts={sendingPrompts}
+							sendSeq={sendSeq}
+							onPreviewImage={openPreview}
 						/>
 					</div>
 					<Composer
@@ -224,7 +372,14 @@ function Session({ client, guestName, onLeave, onRejoin }: SessionProps): ReactN
 						readOnly={snap.readOnly}
 						uiRequest={snap.uiRequest}
 						working={snap.working}
-						queuedMessageCount={snap.state?.queuedMessageCount ?? 0}
+						aborting={snap.state?.isAborting ?? false}
+						queuedMessageCount={hostQueuedCount}
+						queuedPrompts={queuedPrompts}
+						draftKey={draftKey}
+						onDispatchPrompt={dispatchPrompt}
+						onDeliverQueue={deliverQueue}
+						onAbortTriggered={abortRun}
+						onPreviewImage={openPreview}
 					/>
 				</section>
 				{railOpen && (
@@ -255,6 +410,7 @@ function Session({ client, guestName, onLeave, onRejoin }: SessionProps): ReactN
 						viewMode={viewState.mode}
 						viewSeq={viewState.seq}
 						host={toolHost}
+						onPreviewImage={openPreview}
 						onClose={closeDrawer}
 					/>
 				</>
@@ -267,6 +423,7 @@ function Session({ client, guestName, onLeave, onRejoin }: SessionProps): ReactN
 				onNewLink={onLeave}
 			/>
 			<Toasts notices={snap.notices} />
+			<ImageLightbox src={previewSrc} onClose={closePreview} />
 		</div>
 	);
 }

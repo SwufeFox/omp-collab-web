@@ -129,6 +129,13 @@
 	white-space: nowrap;
 }
 
+.tv-elapsed {
+	flex: none;
+	font-size: 10.5px;
+	font-variant-numeric: tabular-nums;
+	color: var(--tv-faint);
+}
+
 .tv-chev {
 	flex: none;
 	width: 7px;

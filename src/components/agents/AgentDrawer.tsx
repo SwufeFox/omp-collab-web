@@ -1,10 +1,11 @@
 import type { AgentSnapshot, SessionEntry, SubagentLifecyclePayload, SubagentProgressPayload } from "@oh-my-pi/pi-wire";
 import { OctagonX, RotateCcw, SendHorizontal, X } from "lucide-react";
-import type { ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { GuestClient } from "../../lib/client";
 import { fmtCost, fmtDuration, fmtPercent, fmtTokens } from "../../lib/format";
 import { decideTranscriptPoll } from "../../lib/transcript-poll";
+import { autosizeTextarea, shouldSubmitOnEnter, useCompositionGuard } from "../shell/Composer";
 import type { TranscriptProps, TranscriptViewMode } from "../transcript/Transcript";
 import { Transcript } from "../transcript/Transcript";
 
@@ -24,16 +25,24 @@ export function AgentDrawer(props: {
 	viewSeq?: number;
 	/** Forwarded to tool renderers so nested task cards can drill further. */
 	host?: TranscriptProps["host"];
+	onPreviewImage?(src: string): void;
 	onClose(): void;
 }): ReactNode {
-	const { agent, progress, lifecycle, client, readOnly, viewMode, viewSeq, host, onClose } = props;
+	const { agent, progress, lifecycle, client, readOnly, viewMode, viewSeq, host, onPreviewImage, onClose } = props;
 	const [entries, setEntries] = useState<readonly SessionEntry[]>([]);
+	const [syncedOnce, setSyncedOnce] = useState(false);
 	const [fetchError, setFetchError] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
+	const chatRef = useRef<HTMLTextAreaElement | null>(null);
+	const { composingRef, onCompositionStart, onCompositionEnd } = useCompositionGuard();
 	/** Resumes a stopped poll loop; null while no loop is mounted. */
 	const resumePollingRef = useRef<(() => void) | null>(null);
 	const quiescentRef = useRef(false);
 	quiescentRef.current = agent.status !== "running";
+
+	useLayoutEffect(() => {
+		autosizeTextarea(chatRef.current, 4, 19, 13);
+	}, [draft]);
 
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
@@ -46,6 +55,7 @@ export function AgentDrawer(props: {
 	// Live transcript: poll the host-side session file while the drawer is open.
 	useEffect(() => {
 		setEntries([]);
+		setSyncedOnce(false);
 		setFetchError(null);
 		if (!agent.hasSessionFile) return;
 		let disposed = false;
@@ -75,9 +85,11 @@ export function AgentDrawer(props: {
 					case "stop":
 						failed = true;
 						stopPolling();
+						setSyncedOnce(true);
 						setFetchError(decision.message);
 						return;
 					case "advance": {
+						setSyncedOnce(true);
 						const grew = decision.newSize !== cursor;
 						cursor = decision.newSize;
 						carry = decision.carry;
@@ -121,6 +133,18 @@ export function AgentDrawer(props: {
 		if (!text) return;
 		client.sendAgentCmd("chat", agent.id, text);
 		setDraft("");
+	};
+
+	const onChatKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>): void => {
+		if (e.key === "Escape") {
+			e.stopPropagation();
+			e.currentTarget.blur();
+			return;
+		}
+		if (shouldSubmitOnEnter(e, composingRef.current)) {
+			e.preventDefault();
+			sendChat();
+		}
 	};
 
 	const p = progress?.progress;
@@ -203,6 +227,8 @@ export function AgentDrawer(props: {
 							working={agent.status === "running" && fetchError === null}
 							viewMode={viewMode}
 							viewSeq={viewSeq}
+							emptyText={syncedOnce ? "No entries recorded yet." : "Syncing subagent transcript…"}
+							onPreviewImage={onPreviewImage}
 							host={host}
 						/>
 						{fetchError !== null ? (
@@ -223,11 +249,17 @@ export function AgentDrawer(props: {
 						sendChat();
 					}}
 				>
-					<input
+					<textarea
+						ref={chatRef}
 						className="ag-chat-input"
+						rows={1}
 						value={draft}
 						placeholder={`Message ${agent.displayName}…`}
 						onChange={e => setDraft(e.target.value)}
+						onKeyDown={onChatKeyDown}
+						onCompositionStart={onCompositionStart}
+						onCompositionEnd={onCompositionEnd}
+						spellCheck={false}
 					/>
 					<button type="submit" className="ag-iconbtn" aria-label="Send message" disabled={draft.trim().length === 0}>
 						<SendHorizontal size={15} aria-hidden />

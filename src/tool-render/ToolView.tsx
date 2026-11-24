@@ -21,6 +21,8 @@ export interface ToolViewProps {
 	result?: ToolResultLike;
 	/** Tool is still executing (live collab view). */
 	running?: boolean;
+	/** Epoch ms when live tool execution started (client-only live elapsed timer). */
+	startedAt?: number;
 	/** Model-provided intent (`i`), shown atop the body. */
 	intent?: string;
 	/** Streaming partial output tail while running. */
@@ -30,6 +32,14 @@ export interface ToolViewProps {
 	openSignal?: ToolOpenSignal;
 	/** Host capabilities (sub-session drill-down, …). */
 	host?: ToolRenderHost;
+}
+
+function fmtLiveElapsed(ms: number): string {
+	const clamped = Math.max(0, ms);
+	if (clamped < 60_000) return `${(clamped / 1000).toFixed(1)}s`;
+	const min = Math.floor(clamped / 60_000);
+	const sec = String(Math.floor((clamped % 60_000) / 1000)).padStart(2, "0");
+	return `${min}m${sec}s`;
 }
 
 function normalizeArgs(raw: unknown): { args: Record<string, unknown>; intent: string | undefined } {
@@ -77,6 +87,7 @@ function toolCommandRecords(result: ToolResultLike | undefined): ToolCommandReco
 
 export function ToolView(props: ToolViewProps): ReactNode {
 	const [open, setOpen] = useState(props.defaultOpen ?? props.openSignal?.open ?? false);
+	const [elapsed, setElapsed] = useState<string | null>(null);
 	const appliedSeqRef = useRef<number | undefined>(props.openSignal?.seq);
 
 	useEffect(() => {
@@ -85,6 +96,18 @@ export function ToolView(props: ToolViewProps): ReactNode {
 		appliedSeqRef.current = sig.seq;
 		setOpen(sig.open);
 	}, [props.openSignal]);
+
+	useEffect(() => {
+		const start = props.startedAt;
+		if (!props.running || start === undefined || !Number.isFinite(start)) {
+			setElapsed(null);
+			return;
+		}
+		const tick = (): void => setElapsed(fmtLiveElapsed(Date.now() - start));
+		tick();
+		const id = setInterval(tick, 200);
+		return () => clearInterval(id);
+	}, [props.running, props.startedAt]);
 	const { args, intent: argIntent } = normalizeArgs(props.args);
 	const intent = props.intent?.trim() || argIntent;
 	const label = intent ? toolIntentLabel(intent) : undefined;
@@ -121,6 +144,7 @@ export function ToolView(props: ToolViewProps): ReactNode {
 					<span className="tv-sum">
 						<renderer.Summary {...renderProps} />
 					</span>
+					{elapsed !== null && <span className="tv-elapsed">{elapsed}</span>}
 					<span className="tv-chev" aria-hidden="true" />
 				</button>
 				{open && (

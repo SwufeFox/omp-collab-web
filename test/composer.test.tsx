@@ -60,6 +60,56 @@ describe("Composer host UI requests", () => {
 		expect(submit.found).toBe(true);
 		expect(submit.disabled).toBe(false);
 	});
+
+	it("surfaces approval badge and helpText on permission select requests", () => {
+		const html = renderToStaticMarkup(
+			<Composer
+				{...props({
+					reqId: 4,
+					kind: "select",
+					title: "Allow bash rm -rf build/?",
+					helpText: "Host agent requested destructive command execution.",
+					approval: true,
+					options: ["Allow once", "Deny"],
+				})}
+			/>,
+		);
+
+		expect(html).toContain("Approval required");
+		expect(html).toContain("Host agent requested destructive command execution.");
+		expect(html).toContain("sh-ask-card-approval");
+	});
+
+	it("renders attach trigger and docked queue shelf with item preview & deliver action while working", () => {
+		const html = renderToStaticMarkup(
+			<Composer
+				client={client}
+				phase="live"
+				readOnly={false}
+				uiRequest={null}
+				working={true}
+				queuedMessageCount={2}
+				queuedPrompts={[
+					{
+						id: "q1",
+						text: "verify reconnect backoff",
+						images: [],
+						mode: "queued",
+						createdAt: 1,
+						baseEntryCount: 5,
+					},
+				]}
+			/>,
+		);
+
+		expect(html).toContain('aria-label="Attach image"');
+		expect(html).toContain("sh-queue-shelf");
+		expect(html).toContain("×2");
+		expect(html).toContain("verify reconnect backoff");
+		expect(html).toContain("+1 queued by other participants");
+		expect(html).toContain("Deliver now");
+		expect(html).toContain("Queue");
+	});
 });
 
 type KeyEvt = KeyboardEvent<HTMLTextAreaElement>;

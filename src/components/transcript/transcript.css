@@ -14,6 +14,7 @@
 	min-height: 0;
 	overflow-y: auto;
 	overflow-x: hidden;
+	scrollbar-gutter: stable;
 	padding: 20px max(20px, calc((100% - 760px) / 2)) 24px;
 	font-family: var(--font-ui);
 	font-size: 14.5px;
@@ -54,6 +55,19 @@
 
 .tr-row--self {
 	border-left-color: var(--accent);
+}
+
+.tr-row--pending {
+	opacity: 0.92;
+	animation: rise 140ms var(--ease-out) backwards;
+}
+
+.tr-pending-tag {
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	color: var(--fg-faint);
+	animation: tr-pulse 1.3s ease-in-out infinite;
+	user-select: none;
 }
 
 .tr-row-head {
@@ -184,11 +198,26 @@
 	gap: 6px;
 }
 
+.tr-msg-img-btn {
+	display: inline-flex;
+	padding: 0;
+	border: 0;
+	background: none;
+	cursor: zoom-in;
+	border-radius: var(--radius-sm);
+}
+
 .tr-msg-img {
+	display: block;
 	max-height: 240px;
 	max-width: 100%;
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
+	transition: border-color 120ms ease-out;
+}
+
+.tr-msg-img-btn:hover .tr-msg-img {
+	border-color: var(--border-strong);
 }
 
 /* ---- execution step groups (Codex / AGY / Claude Code style) ---- */
@@ -212,7 +241,8 @@
 .tr-steps-toggle {
 	display: inline-flex;
 	align-items: center;
-	gap: 5px;
+	gap: 6px;
+	min-width: 0;
 	padding: 2px 6px 2px 2px;
 	border: none;
 	border-radius: var(--radius-sm);
@@ -229,6 +259,8 @@
 }
 
 .tr-steps-detail-btn {
+	flex: none;
+	white-space: nowrap;
 	padding: 2px 6px;
 	border: none;
 	border-radius: var(--radius-sm);
@@ -708,12 +740,35 @@
 .tr-md pre {
 	position: relative;
 	margin: 10px 0;
-	padding: 11px 52px 11px 13px;
+	padding: 11px 13px;
 	overflow-x: auto;
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
 	background: var(--bg-inset);
 	-webkit-overflow-scrolling: touch;
+}
+
+.tr-md pre.tr-pre-enhanced {
+	padding: 0;
+	overflow: hidden;
+}
+
+.tr-code-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	height: 28px;
+	padding: 0 8px 0 12px;
+	border-bottom: 1px solid var(--border);
+	background: var(--panel);
+}
+
+.tr-code-lang {
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	color: var(--fg-faint);
+	user-select: none;
 }
 
 .tr-md pre code {
@@ -725,43 +780,35 @@
 	line-height: 1.55;
 }
 
+.tr-md pre.tr-pre-enhanced > code {
+	display: block;
+	padding: 10px 13px;
+	overflow-x: auto;
+	-webkit-overflow-scrolling: touch;
+}
+
 .tr-code-copy {
-	position: absolute;
-	top: 7px;
-	right: 7px;
-	height: 22px;
+	height: 20px;
 	padding: 0 7px;
-	border: 1px solid var(--border);
+	border: 1px solid transparent;
 	border-radius: var(--radius-sm);
-	background: var(--bg-raised);
+	background: transparent;
 	color: var(--fg-muted);
 	font-family: var(--font-mono);
 	font-size: 10.5px;
-	opacity: 0;
 	transition:
-		opacity 120ms ease-out,
 		color 120ms ease-out,
+		background 120ms ease-out,
 		border-color 120ms ease-out;
-}
-
-.tr-md pre:hover .tr-code-copy,
-.tr-md pre:focus-within .tr-code-copy {
-	opacity: 1;
-}
-
-@media (hover: none) {
-	.tr-code-copy {
-		opacity: 1;
-	}
 }
 
 .tr-code-copy:hover {
 	color: var(--fg);
-	border-color: var(--border-strong);
+	background: var(--hover);
+	border-color: var(--border);
 }
 
 .tr-code-copy--ok {
-	opacity: 1;
 	color: var(--ok);
 	border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }

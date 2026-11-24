@@ -444,6 +444,7 @@
 .ag-chat {
 	display: flex;
 	flex: none;
+	align-items: flex-end;
 	gap: 6px;
 	padding: 12px 14px;
 	border-top: 1px solid var(--border);
@@ -452,14 +453,16 @@
 .ag-chat-input {
 	flex: 1;
 	min-width: 0;
-	height: 32px;
-	padding: 0 11px;
+	min-height: 32px;
+	padding: 6px 11px;
 	border: 1px solid var(--border-strong);
 	border-radius: var(--radius);
 	background: var(--bg-inset);
 	color: var(--fg);
 	font: inherit;
 	font-size: 13px;
+	line-height: 19px;
+	resize: none;
 }
 
 .ag-chat-input::placeholder {
@@ -524,7 +527,8 @@
 		padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
 	}
 	.ag-chat-input {
-		height: 38px;
+		min-height: 38px;
+		padding: 8px 11px;
 	}
 }
 
